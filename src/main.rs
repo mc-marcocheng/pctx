@@ -25,7 +25,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     // Disable colors if requested or not a terminal
-    if cli.global.no_color || !io::stderr().is_terminal() {
+    if cli.global.no_color
+        || std::env::var_os("NO_COLOR").is_some()
+        || (!io::stderr().is_terminal() && !io::stdout().is_terminal())
+    {
         colored::control::set_override(false);
     }
 
@@ -82,7 +85,7 @@ fn run_generate_command(
 
     // Scan for files (either from paths or stdin)
     let scanner = Scanner::new(&config);
-    let files = if args.stdin {
+    let scan_result = if args.stdin {
         let paths = read_paths_from_stdin()?;
         if paths.is_empty() {
             return handle_no_files_matched(args, global);
@@ -92,14 +95,37 @@ fn run_generate_command(
         scanner.scan()?
     };
 
-    if files.is_empty() {
+    if scan_result.files.is_empty() {
+        if let Some((_, err)) = scan_result.errors.into_iter().next() {
+            return Err(err);
+        }
         return handle_no_files_matched(args, global);
     }
+
+    let files = scan_result.files;
+
+    // Convert scan errors into file errors for reporting
+    for (path, err) in &scan_result.errors {
+        if global.verbose && !global.json {
+            eprintln!("Warning: {}: {}", path.display(), err);
+        }
+    }
+    let mut scan_file_errors: Vec<FileError> = scan_result
+        .errors
+        .iter()
+        .map(|(path, err)| FileError {
+            path: path.to_string_lossy().to_string(),
+            code: err.code().to_string(),
+            message: err.to_string(),
+            transient: err.is_transient(),
+        })
+        .collect();
 
     // Process content
     let processor = ContentProcessor::new(&config);
     let mut entries: Vec<FileEntry> = Vec::new();
     let mut file_errors: Vec<FileError> = Vec::new();
+    file_errors.append(&mut scan_file_errors);
     let mut stats = Stats::new();
 
     for file_path in files {
@@ -249,21 +275,29 @@ fn write_output(
     args: &pctx::cli::OutputArgs,
     global: &pctx::cli::GlobalArgs,
 ) -> Result<(), PctxError> {
+    let mut wrote_to_dest = false;
+
     if let Some(ref path) = args.output {
         file::write(path, content, args.force)?;
         if !global.json && !global.quiet {
             eprintln!("Written to: {}", path.display());
         }
-    } else if args.clipboard {
+        wrote_to_dest = true;
+    }
+
+    if args.clipboard {
         clipboard::write(content)?;
         if !global.json && !global.quiet {
             eprintln!("✓ Copied to clipboard ({} bytes)", content.len());
         }
-    } else {
-        // Stdout
+        wrote_to_dest = true;
+    }
+
+    if !wrote_to_dest {
         print!("{}", content);
         io::stdout().flush().map_err(PctxError::Io)?;
     }
+
     Ok(())
 }
 
@@ -275,14 +309,16 @@ fn run_files_command(
         FilesCommands::List { filter, quiet } => {
             let config = Config::from_filter_args(filter, global)?;
             let scanner = Scanner::new(&config);
-            let files = scanner.scan()?;
+            let scan_result = scanner.scan()?;
+            let files = scan_result.files;
+            let relative_files = relativize_paths(&files);
 
             // Check if output should be suppressed (either local --quiet or global --quiet)
             let suppress_extra = *quiet || global.quiet;
 
             if suppress_extra {
                 // Bare output - one path per line, perfect for piping
-                for file in &files {
+                for file in &relative_files {
                     println!("{}", file.display());
                 }
             } else if global.json {
@@ -297,7 +333,7 @@ fn run_files_command(
                 });
                 println!("{}", serde_json::to_string_pretty(&response)?);
             } else {
-                for file in &files {
+                for file in &relative_files {
                     println!("{}", file.display());
                 }
                 eprintln!("\n{} files", files.len());
@@ -312,8 +348,10 @@ fn run_files_command(
         FilesCommands::Tree { filter } => {
             let config = Config::from_filter_args(filter, global)?;
             let scanner = Scanner::new(&config);
-            let files = scanner.scan()?;
-            let tree_struct = tree::build_tree(&files);
+            let scan_result = scanner.scan()?;
+            let files = scan_result.files;
+            let relative_files = relativize_paths(&files);
+            let tree_struct = tree::build_tree(&relative_files);
 
             if global.json {
                 let response = JsonResponse::Success(SuccessResponse {
@@ -399,6 +437,17 @@ fn generate_completions(shell: &pctx::cli::Shell) {
         pctx::cli::Shell::Elvish => clap_complete::Shell::Elvish,
     };
     generate(shell_type, &mut cmd, "pctx", &mut io::stdout());
+}
+
+fn relativize_paths(files: &[PathBuf]) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| dunce::canonicalize(&p).ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    files
+        .iter()
+        .map(|f| f.strip_prefix(&cwd).unwrap_or(f).to_path_buf())
+        .collect()
 }
 
 fn handle_dry_run(

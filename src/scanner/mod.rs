@@ -9,6 +9,12 @@ use crate::config::Config;
 use crate::error::PctxError;
 use crate::filter::patterns::PatternMatcher;
 
+/// Result of a file scan operation
+pub struct ScanResult {
+    pub files: Vec<PathBuf>,
+    pub errors: Vec<(PathBuf, PctxError)>,
+}
+
 /// Scanner for discovering files to include in context
 pub struct Scanner<'a> {
     config: &'a Config,
@@ -36,9 +42,9 @@ impl<'a> Scanner<'a> {
     }
 
     /// Scan configured paths and return list of files to process
-    pub fn scan(&self) -> Result<Vec<PathBuf>, PctxError> {
+    pub fn scan(&self) -> Result<ScanResult, PctxError> {
         let mut all_files = Vec::new();
-        let mut first_error: Option<PctxError> = None;
+        let mut errors = Vec::new();
 
         for path in &self.config.paths {
             if !path.exists() {
@@ -46,9 +52,7 @@ impl<'a> Scanner<'a> {
                 if self.config.verbose {
                     eprintln!("Warning: {}", err);
                 }
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
+                errors.push((path.clone(), err));
                 continue;
             }
 
@@ -60,7 +64,18 @@ impl<'a> Scanner<'a> {
                 }
             } else if canonical.is_dir() {
                 let files = if self.config.use_gitignore && git::is_inside_git_repo(&canonical) {
-                    git::scan_git_repo(&canonical, self.config)?
+                    match git::scan_git_repo(&canonical, self.config) {
+                        Ok(files) => files,
+                        Err(e) => {
+                            if self.config.verbose {
+                                eprintln!(
+                                    "Warning: git scan failed ({}), falling back to directory walk",
+                                    e
+                                );
+                            }
+                            walker::scan_directory(&canonical, self.config)?
+                        }
+                    }
                 } else {
                     walker::scan_directory(&canonical, self.config)?
                 };
@@ -77,18 +92,16 @@ impl<'a> Scanner<'a> {
         all_files.sort();
         all_files.dedup();
 
-        if all_files.is_empty() {
-            if let Some(err) = first_error {
-                return Err(err);
-            }
-        }
-
-        Ok(all_files)
+        Ok(ScanResult {
+            files: all_files,
+            errors,
+        })
     }
 
     /// Scan from a list of explicit file paths (for --stdin mode)
-    pub fn scan_paths(&self, paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, PctxError> {
+    pub fn scan_paths(&self, paths: Vec<PathBuf>) -> Result<ScanResult, PctxError> {
         let mut all_files = Vec::new();
+        let mut errors = Vec::new();
 
         for path in paths {
             if !path.exists() {
@@ -97,6 +110,7 @@ impl<'a> Scanner<'a> {
                 if self.config.verbose {
                     eprintln!("Warning: file not found, skipping: {}", path.display());
                 }
+                errors.push((path.clone(), PctxError::FileNotFound(path.clone())));
                 continue;
             }
 
@@ -109,7 +123,18 @@ impl<'a> Scanner<'a> {
             } else if canonical.is_dir() {
                 // For directories in stdin mode, we expand them
                 let files = if self.config.use_gitignore && git::is_inside_git_repo(&canonical) {
-                    git::scan_git_repo(&canonical, self.config)?
+                    match git::scan_git_repo(&canonical, self.config) {
+                        Ok(files) => files,
+                        Err(e) => {
+                            if self.config.verbose {
+                                eprintln!(
+                                    "Warning: git scan failed ({}), falling back to directory walk",
+                                    e
+                                );
+                            }
+                            walker::scan_directory(&canonical, self.config)?
+                        }
+                    }
                 } else {
                     walker::scan_directory(&canonical, self.config)?
                 };
@@ -126,7 +151,10 @@ impl<'a> Scanner<'a> {
         all_files.sort();
         all_files.dedup();
 
-        Ok(all_files)
+        Ok(ScanResult {
+            files: all_files,
+            errors,
+        })
     }
 
     /// Check if a file should be included based on patterns and size

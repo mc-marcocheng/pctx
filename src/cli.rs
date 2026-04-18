@@ -341,6 +341,12 @@ impl ContentFormat {
     }
 }
 
+impl std::fmt::Display for ContentFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Supported shells for completion generation
 #[derive(ValueEnum, Clone, Debug)]
 pub enum Shell {

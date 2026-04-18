@@ -160,7 +160,7 @@ fn test_files_tree() {
         .args(["files", "tree"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("src").or(predicate::str::contains("files")));
+        .stdout(predicate::str::contains("src"));
 }
 
 #[test]
@@ -762,12 +762,13 @@ fn test_stdin_with_nonexistent_files() {
         MAIN_SEPARATOR_STR, MAIN_SEPARATOR_STR
     );
 
+    // Exit code 7 (PARTIAL) because nonexistent.txt is a file error
     pctx()
         .current_dir(dir.path())
         .args(["--stdin", "--verbose"])
         .write_stdin(stdin_content)
         .assert()
-        .success()
+        .code(7)
         .stdout(predicate::str::contains("main.rs"))
         .stdout(predicate::str::contains("lib.rs"));
 }
@@ -1015,4 +1016,133 @@ fn test_negation_pattern_warning() {
         .stderr(predicate::str::contains(
             "negation patterns are not supported",
         ));
+}
+
+#[test]
+fn test_tree_in_xml_format() {
+    let dir = setup_test_project();
+
+    pctx()
+        .current_dir(dir.path())
+        .args(["--format", "xml", "--tree"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("<tree>"))
+        .stdout(predicate::str::contains("<![CDATA["))
+        .stdout(predicate::str::contains("src"));
+}
+
+#[test]
+fn test_tree_in_plain_format() {
+    let dir = setup_test_project();
+
+    pctx()
+        .current_dir(dir.path())
+        .args(["--format", "plain", "--tree"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("=== File Tree ==="))
+        .stdout(predicate::str::contains("src"));
+}
+
+#[test]
+fn test_fence_injection_prevention() {
+    let dir = TempDir::new().unwrap();
+
+    // Create a file with triple backticks in content
+    fs::write(
+        dir.path().join("code.md"),
+        "Some text\n```\ncode block\n```\nmore text",
+    )
+    .unwrap();
+
+    let output = pctx().current_dir(dir.path()).assert().success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+
+    // Should use 4 backticks for the fence since content has 3
+    assert!(stdout.contains("````markdown"));
+    assert!(stdout.contains("````"));
+}
+
+#[test]
+fn test_fence_injection_with_four_backticks() {
+    let dir = TempDir::new().unwrap();
+
+    // Create a file with four backticks in content
+    fs::write(
+        dir.path().join("code.md"),
+        "Some text\n````\ncode block\n````\nmore text",
+    )
+    .unwrap();
+
+    let output = pctx().current_dir(dir.path()).assert().success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+
+    // Should use 5 backticks for the fence since content has 4
+    assert!(stdout.contains("`````markdown"));
+    assert!(stdout.contains("`````"));
+}
+
+#[test]
+fn test_absolute_paths_flag() {
+    let dir = setup_test_project();
+    let dir_path = dir.path().to_string_lossy().to_string();
+
+    let output = pctx()
+        .current_dir(dir.path())
+        .arg("--absolute-paths")
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+
+    // Should contain absolute path
+    assert!(stdout.contains(&dir_path));
+}
+
+#[test]
+fn test_no_default_excludes() {
+    let dir = TempDir::new().unwrap();
+
+    // Create a regular file outside node_modules
+    fs::write(dir.path().join("regular.txt"), "regular content").unwrap();
+
+    // Create a node_modules directory with a file
+    let node_modules = dir.path().join("node_modules");
+    fs::create_dir(&node_modules).unwrap();
+    fs::write(node_modules.join("package.json"), r#"{"name": "test"}"#).unwrap();
+
+    // By default, node_modules should be excluded
+    pctx()
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("regular.txt"))
+        .stdout(predicate::str::contains("node_modules").not());
+
+    // With --no-default-excludes, it should be included
+    pctx()
+        .current_dir(dir.path())
+        .args(["--no-default-excludes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_modules"));
+}
+
+#[test]
+fn test_max_size_filter() {
+    let dir = TempDir::new().unwrap();
+
+    // Create files of different sizes
+    fs::write(dir.path().join("small.txt"), "small").unwrap();
+    fs::write(dir.path().join("medium.txt"), "x".repeat(1500)).unwrap();
+
+    // With max-size 1KB, only small.txt should be included
+    pctx()
+        .current_dir(dir.path())
+        .args(["--max-size", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("small.txt"))
+        .stdout(predicate::str::contains("medium.txt").not());
 }

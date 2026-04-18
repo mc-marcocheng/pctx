@@ -17,10 +17,16 @@ pub fn truncate_content(content: &str, config: &TruncationConfig) -> (String, bo
 
     // Check if we need line truncation
     let processed_lines: Vec<String> = if config.max_lines > 0 && total_lines > config.max_lines {
-        let head_count = config.head_lines.min(total_lines);
-        let tail_count = config
+        let mut head_count = config.head_lines.min(config.max_lines);
+        let mut tail_count = config
             .tail_lines
-            .min(total_lines.saturating_sub(head_count));
+            .min(config.max_lines.saturating_sub(head_count));
+
+        // Ensure we don't exceed total_lines
+        if head_count + tail_count > total_lines {
+            head_count = head_count.min(total_lines);
+            tail_count = total_lines.saturating_sub(head_count);
+        }
 
         if head_count + tail_count >= total_lines {
             // head + tail covers all lines; no actual truncation needed

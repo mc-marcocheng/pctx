@@ -70,6 +70,19 @@ impl PatternMatcher {
                         return true;
                     }
                 }
+
+                // Directory prefix matching: if a parent directory matches, exclude
+                // This handles patterns like "node_modules" matching "node_modules/pkg/index.js"
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        for parent_component in parent.components() {
+                            let parent_str = parent_component.as_os_str().to_string_lossy();
+                            if pattern.pattern.matches(&parent_str) {
+                                return true;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -101,6 +114,18 @@ impl PatternMatcher {
                 if let Some(filename) = path.file_name() {
                     if pattern.pattern.matches(&filename.to_string_lossy()) {
                         return true;
+                    }
+                }
+
+                // Directory prefix matching for includes
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        for parent_component in parent.components() {
+                            let parent_str = parent_component.as_os_str().to_string_lossy();
+                            if pattern.pattern.matches(&parent_str) {
+                                return true;
+                            }
+                        }
                     }
                 }
             }
@@ -139,9 +164,11 @@ fn compile_pattern(pattern: &str) -> Option<CompiledPattern> {
     // Convert gitignore patterns to glob patterns
     let glob_pattern = if anchored {
         // Anchored patterns match from root only
+        // Per gitignore spec: / at start anchors to directory where .gitignore is
         pattern_body.to_string()
-    } else if clean.contains('/') {
-        // Pattern with path separator but not anchored - match anywhere
+    } else if clean.contains('/') && !clean.starts_with("**") {
+        // Pattern with path separator but not anchored - match anywhere in tree
+        // Per gitignore spec: patterns without leading / match at any level
         format!("**/{}", pattern_body)
     } else {
         // Simple pattern - match the name anywhere

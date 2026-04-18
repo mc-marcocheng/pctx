@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::content::FileEntry;
 use crate::error::PctxError;
 use crate::output::tree;
+use std::path::PathBuf;
 
 /// Format file entries according to configuration
 pub fn format_output(entries: &[FileEntry], config: &Config) -> Result<String, PctxError> {
@@ -15,12 +16,24 @@ pub fn format_output(entries: &[FileEntry], config: &Config) -> Result<String, P
     }
 }
 
+/// Determine the minimum fence string that doesn't appear in the content
+fn fence_for_content(content: &str) -> String {
+    let mut fence = "```".to_string();
+    while content.contains(&fence) {
+        fence.push('`');
+    }
+    fence
+}
+
 fn format_markdown(entries: &[FileEntry], config: &Config) -> Result<String, PctxError> {
     let mut output = String::new();
 
     // Optional tree view
     if config.show_tree {
-        let paths: Vec<_> = entries.iter().map(|e| e.absolute_path.clone()).collect();
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| PathBuf::from(&e.relative_path))
+            .collect();
         let tree_struct = tree::build_tree(&paths);
 
         output.push_str("## File Tree\n\n```\n");
@@ -37,7 +50,8 @@ fn format_markdown(entries: &[FileEntry], config: &Config) -> Result<String, Pct
 
         // Code block with language
         let lang = extension_to_language(&entry.extension);
-        output.push_str(&format!("```{}\n", lang));
+        let fence = fence_for_content(&entry.content);
+        output.push_str(&format!("{}{}\n", fence, lang));
         output.push_str(&entry.content);
 
         // Ensure content ends with newline
@@ -45,7 +59,8 @@ fn format_markdown(entries: &[FileEntry], config: &Config) -> Result<String, Pct
             output.push('\n');
         }
 
-        output.push_str("```\n\n");
+        output.push_str(&fence);
+        output.push_str("\n\n");
     }
 
     Ok(output)
@@ -53,6 +68,17 @@ fn format_markdown(entries: &[FileEntry], config: &Config) -> Result<String, Pct
 
 fn format_xml(entries: &[FileEntry], config: &Config) -> Result<String, PctxError> {
     let mut output = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<context>\n");
+
+    if config.show_tree {
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| PathBuf::from(&e.relative_path))
+            .collect();
+        let tree_struct = tree::build_tree(&paths);
+        output.push_str("  <tree><![CDATA[\n");
+        output.push_str(&tree::tree_to_string(&tree_struct));
+        output.push_str("]]></tree>\n");
+    }
 
     for entry in entries {
         let display_path = entry.display_path(config.absolute_paths);
@@ -79,6 +105,17 @@ fn format_xml(entries: &[FileEntry], config: &Config) -> Result<String, PctxErro
 
 fn format_plain(entries: &[FileEntry], config: &Config) -> Result<String, PctxError> {
     let mut output = String::new();
+
+    if config.show_tree {
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| PathBuf::from(&e.relative_path))
+            .collect();
+        let tree_struct = tree::build_tree(&paths);
+        output.push_str("=== File Tree ===\n");
+        output.push_str(&tree::tree_to_string(&tree_struct));
+        output.push('\n');
+    }
 
     for entry in entries {
         let display_path = entry.display_path(config.absolute_paths);
