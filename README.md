@@ -1,6 +1,11 @@
 # pctx
 
+<p align="center">
+  <img src="assets/screenshot.png" alt="pctx demo" width="600">
+</p>
+
 Generate LLM-ready context from your codebase. Intelligently packages source files with proper formatting, truncation, and filtering for optimal AI assistant consumption.
+
 
 ## Features
 
