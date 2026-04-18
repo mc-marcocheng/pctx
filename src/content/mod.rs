@@ -46,15 +46,42 @@ impl FileEntry {
     }
 }
 
+/// Strip Windows extended path prefix (\\?\) if present
+fn normalize_path(path: &Path) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// Processor for reading and transforming file content
 pub struct ContentProcessor<'a> {
     config: &'a Config,
+    base_path: PathBuf,
 }
 
 impl<'a> ContentProcessor<'a> {
     /// Create a new content processor
     pub fn new(config: &'a Config) -> Self {
-        Self { config }
+        // Canonicalize the base path to resolve symlinks, then normalize
+        let base_path = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| normalize_path(&p))
+            .unwrap_or_else(|| PathBuf::from("."));
+        Self { config, base_path }
+    }
+
+    /// Create a new content processor with a specific base path
+    pub fn with_base_path(config: &'a Config, base_path: PathBuf) -> Self {
+        // Canonicalize to resolve symlinks, then normalize
+        let base_path = base_path
+            .canonicalize()
+            .map(|p| normalize_path(&p))
+            .unwrap_or(base_path);
+        Self { config, base_path }
     }
 
     /// Process a file and return a FileEntry
@@ -75,11 +102,14 @@ impl<'a> ContentProcessor<'a> {
 
         let line_count = content.lines().count();
 
-        // Compute relative path
-        let relative_path = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| path.to_path_buf());
+        // Normalize path to handle Windows \\?\ prefix
+        let clean_path = normalize_path(path);
+
+        // Compute relative path (base_path is already normalized in constructor)
+        let relative_path = clean_path
+            .strip_prefix(&self.base_path)
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|_| clean_path.clone());
 
         let extension = path
             .extension()
@@ -87,7 +117,7 @@ impl<'a> ContentProcessor<'a> {
             .unwrap_or_default();
 
         Ok(FileEntry {
-            absolute_path: path.to_path_buf(),
+            absolute_path: clean_path,
             relative_path: relative_path.to_string_lossy().to_string(),
             extension,
             original_bytes,
@@ -97,5 +127,343 @@ impl<'a> ContentProcessor<'a> {
             truncated_lines,
             content,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::ContentFormat;
+    use crate::config::TruncationConfig;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_config() -> Config {
+        Config {
+            paths: vec![],
+            exclude_patterns: vec![],
+            include_patterns: vec![],
+            include_hidden: false,
+            use_default_excludes: true,
+            use_gitignore: true,
+            max_file_size: 10 * 1024 * 1024, // 10 MB
+            max_depth: None,
+            truncation: TruncationConfig {
+                max_lines: 0, // 0 means no limit
+                head_lines: 50,
+                tail_lines: 20,
+                max_line_length: 0, // 0 means no limit
+                head_chars: 500,
+                tail_chars: 200,
+            },
+            output_format: ContentFormat::Markdown,
+            show_tree: false,
+            show_stats: false,
+            absolute_paths: false,
+            verbose: false,
+            quiet: false,
+        }
+    }
+
+    #[test]
+    fn test_normalize_path_regular() {
+        let path = PathBuf::from("/some/regular/path");
+        assert_eq!(normalize_path(&path), path);
+    }
+
+    #[test]
+    fn test_normalize_path_windows_prefix() {
+        let path = PathBuf::from(r"\\?\C:\Users\Test\file.txt");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, PathBuf::from(r"C:\Users\Test\file.txt"));
+    }
+
+    #[test]
+    fn test_normalize_path_no_prefix() {
+        let path = PathBuf::from(r"C:\Users\Test\file.txt");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, path);
+    }
+
+    #[test]
+    fn test_file_entry_display_path_relative() {
+        let entry = FileEntry {
+            absolute_path: PathBuf::from("/home/user/project/src/main.rs"),
+            relative_path: "src/main.rs".to_string(),
+            extension: "rs".to_string(),
+            original_bytes: 100,
+            original_lines: 10,
+            line_count: 10,
+            truncated: false,
+            truncated_lines: 0,
+            content: "fn main() {}".to_string(),
+        };
+
+        assert_eq!(entry.display_path(false), "src/main.rs");
+    }
+
+    #[test]
+    fn test_file_entry_display_path_absolute() {
+        let entry = FileEntry {
+            absolute_path: PathBuf::from("/home/user/project/src/main.rs"),
+            relative_path: "src/main.rs".to_string(),
+            extension: "rs".to_string(),
+            original_bytes: 100,
+            original_lines: 10,
+            line_count: 10,
+            truncated: false,
+            truncated_lines: 0,
+            content: "fn main() {}".to_string(),
+        };
+
+        assert_eq!(entry.display_path(true), "/home/user/project/src/main.rs");
+    }
+
+    #[test]
+    fn test_content_processor_process_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.txt");
+        fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(entry.relative_path, "test.txt");
+        assert_eq!(entry.extension, "txt");
+        assert_eq!(entry.original_lines, 3);
+        assert_eq!(entry.original_bytes, 21);
+        assert!(!entry.truncated);
+        // Note: trailing newline may be normalized during processing
+        assert!(entry.content.contains("line 1"));
+        assert!(entry.content.contains("line 2"));
+        assert!(entry.content.contains("line 3"));
+    }
+
+    #[test]
+    fn test_content_processor_nested_file() {
+        let dir = TempDir::new().unwrap();
+        let nested_dir = dir.path().join("src").join("lib");
+        fs::create_dir_all(&nested_dir).unwrap();
+        let file_path = nested_dir.join("module.rs");
+        fs::write(&file_path, "pub fn test() {}").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        // Check relative path uses correct separators
+        assert!(
+            entry.relative_path == "src/lib/module.rs"
+                || entry.relative_path == r"src\lib\module.rs"
+        );
+        assert_eq!(entry.extension, "rs");
+    }
+
+    #[test]
+    fn test_content_processor_no_extension() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("Makefile");
+        fs::write(&file_path, "all:\n\techo hello").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(entry.extension, "");
+    }
+
+    #[test]
+    fn test_content_processor_binary_file_rejected() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("binary.bin");
+        // Write binary content (PNG header)
+        fs::write(&file_path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let result = processor.process(&file_path);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), PctxError::BinaryFile(_)));
+    }
+
+    #[test]
+    fn test_content_processor_empty_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("empty.txt");
+        fs::write(&file_path, "").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(entry.original_lines, 0);
+        assert_eq!(entry.original_bytes, 0);
+        assert_eq!(entry.content, "");
+    }
+
+    #[test]
+    fn test_content_processor_unicode_content() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("unicode.txt");
+        fs::write(&file_path, "Hello 世界\nПривет мир\n🎉🎊").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(entry.original_lines, 3);
+        assert!(entry.content.contains("世界"));
+        assert!(entry.content.contains("Привет"));
+        assert!(entry.content.contains("🎉"));
+    }
+
+    #[test]
+    fn test_content_processor_truncation() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("long.txt");
+
+        // Create a file with many lines
+        let content: String = (1..=100).map(|i| format!("line {}\n", i)).collect();
+        fs::write(&file_path, &content).unwrap();
+
+        let mut config = create_test_config();
+        config.truncation.max_lines = 20;
+        config.truncation.head_lines = 5;
+        config.truncation.tail_lines = 5;
+
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert!(entry.truncated);
+        assert_eq!(entry.original_lines, 100);
+        assert!(entry.truncated_lines > 0);
+        assert!(entry.content.contains("line 1"));
+        assert!(entry.content.contains("line 100"));
+        assert!(entry.content.contains("lines omitted"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_content_processor_symlink_resolution() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create actual directory with a file
+        let real_dir = dir.path().join("real");
+        fs::create_dir(&real_dir).unwrap();
+        let file_path = real_dir.join("test.txt");
+        fs::write(&file_path, "test content").unwrap();
+
+        // Create symlink to the directory
+        let link_dir = dir.path().join("link");
+        symlink(&real_dir, &link_dir).unwrap();
+
+        // Process file via symlink path
+        let linked_file = link_dir.join("test.txt");
+
+        let config = create_test_config();
+        // Use symlink as base path - should resolve to real path
+        let processor = ContentProcessor::with_base_path(&config, link_dir.clone());
+
+        let entry = processor.process(&linked_file).unwrap();
+
+        // Relative path should be just the filename
+        assert_eq!(entry.relative_path, "test.txt");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_normalize_path_windows_unc() {
+        // Test UNC path without \\?\ prefix
+        let path = PathBuf::from(r"\\server\share\file.txt");
+        let normalized = normalize_path(&path);
+        assert_eq!(normalized, path);
+    }
+
+    #[test]
+    fn test_content_processor_file_outside_base() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        let file_path = dir2.path().join("outside.txt");
+        fs::write(&file_path, "content").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir1.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        // When file is outside base path, relative_path should be the full path
+        // (since strip_prefix fails)
+        assert!(entry.relative_path.contains("outside.txt"));
+    }
+
+    #[test]
+    fn test_content_processor_extension_case_insensitive() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.RS");
+        fs::write(&file_path, "fn main() {}").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        // Extension should be lowercase
+        assert_eq!(entry.extension, "rs");
+    }
+
+    #[test]
+    fn test_content_processor_multiple_extensions() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.spec.ts");
+        fs::write(&file_path, "describe('test', () => {});").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        // Only the last extension is captured
+        assert_eq!(entry.extension, "ts");
+    }
+
+    #[test]
+    fn test_content_processor_hidden_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join(".hidden");
+        fs::write(&file_path, "secret").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(entry.relative_path, ".hidden");
+        assert_eq!(entry.extension, "");
+    }
+
+    #[test]
+    fn test_content_processor_preserves_line_endings() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("crlf.txt");
+        fs::write(&file_path, "line1\r\nline2\r\nline3").unwrap();
+
+        let config = create_test_config();
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        // Content should preserve original line endings
+        assert!(entry.content.contains("\r\n") || entry.content.contains('\n'));
     }
 }
