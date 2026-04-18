@@ -496,10 +496,4 @@ pctx --git-diff origin/main
 - Using `git diff --name-only | pctx --stdin` (works but verbose)
 ````
 
-## Questions?
-
-- Open a [GitHub Discussion](https://github.com/mc-marcocheng/pctx/discussions) for questions
-- Check existing issues before opening a new one
-- Join our community chat (if applicable)
-
 Thank you for contributing! 🎉
