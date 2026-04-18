@@ -1,50 +1,94 @@
-//! File reading utilities with encoding detection.
+//! File content reading with encoding detection.
 
 use std::fs;
 use std::path::Path;
 
 use crate::error::PctxError;
 
-/// Threshold for replacement characters - if more than this ratio, consider it encoding error
-const REPLACEMENT_CHAR_THRESHOLD: f64 = 0.3;
-
-/// Read a file as UTF-8 text
-pub fn read_file(path: &Path) -> Result<String, PctxError> {
-    // Try reading as UTF-8 first
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(content),
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Err(PctxError::FileNotFound(path.to_path_buf()))
-            } else if e.kind() == std::io::ErrorKind::PermissionDenied {
-                Err(PctxError::PermissionDenied(path.to_path_buf()))
-            } else {
-                // Try reading as bytes and converting with lossy UTF-8
-                match fs::read(path) {
-                    Ok(bytes) => {
-                        let content = String::from_utf8_lossy(&bytes);
-                        // If there are replacement characters, it might be binary
-                        if content.contains('\u{FFFD}') {
-                            // Check if it's mostly replacement chars
-                            let replacement_count = content.matches('\u{FFFD}').count();
-                            let char_count = content.chars().count();
-                            if char_count > 0
-                                && (replacement_count as f64 / char_count as f64)
-                                    > REPLACEMENT_CHAR_THRESHOLD
-                            {
-                                return Err(PctxError::EncodingError {
-                                    path: path.to_path_buf(),
-                                    reason:
-                                        "File appears to be binary or uses unsupported encoding"
-                                            .to_string(),
-                                });
-                            }
-                        }
-                        Ok(content.into_owned())
-                    }
-                    Err(e) => Err(PctxError::Io(e)),
-                }
-            }
+/// Read file contents, attempting to handle encoding issues gracefully
+pub fn read_file_contents(path: &Path, _encoding: Option<&str>) -> Result<String, PctxError> {
+    // Read raw bytes
+    let bytes = fs::read(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            PctxError::FileNotFound(path.to_path_buf())
+        } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+            PctxError::PermissionDenied(path.to_path_buf())
+        } else {
+            PctxError::Io(e)
         }
+    })?;
+
+    // Try UTF-8 first (most common case)
+    match String::from_utf8(bytes.clone()) {
+        Ok(content) => Ok(content),
+        Err(_) => {
+            // Fall back to lossy UTF-8 conversion
+            // This handles files with mixed encodings or invalid UTF-8 sequences
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_read_utf8_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "Hello, world!").unwrap();
+        writeln!(file, "This is a test.").unwrap();
+
+        let content = read_file_contents(file.path(), None).unwrap();
+        assert!(content.contains("Hello, world!"));
+        assert!(content.contains("This is a test."));
+    }
+
+    #[test]
+    fn test_read_file_with_unicode() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "Hello, 世界!").unwrap();
+        writeln!(file, "Привет мир!").unwrap();
+        writeln!(file, "🎉🎊🎈").unwrap();
+
+        let content = read_file_contents(file.path(), None).unwrap();
+        assert!(content.contains("世界"));
+        assert!(content.contains("Привет"));
+        assert!(content.contains("🎉"));
+    }
+
+    #[test]
+    fn test_read_empty_file() {
+        let file = NamedTempFile::new().unwrap();
+        let content = read_file_contents(file.path(), None).unwrap();
+        assert!(content.is_empty());
+    }
+
+    #[test]
+    fn test_read_nonexistent_file() {
+        let result = read_file_contents(Path::new("/nonexistent/file.txt"), None);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PctxError::FileNotFound(_) => {}
+            e => panic!("Expected FileNotFound, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_read_file_with_invalid_utf8() {
+        let mut file = NamedTempFile::new().unwrap();
+        // Write some valid UTF-8 followed by invalid bytes
+        file.write_all(b"Valid text ").unwrap();
+        file.write_all(&[0xFF, 0xFE]).unwrap(); // Invalid UTF-8
+        file.write_all(b" more text").unwrap();
+
+        // Should succeed with lossy conversion
+        let content = read_file_contents(file.path(), None).unwrap();
+        assert!(content.contains("Valid text"));
+        assert!(content.contains("more text"));
+        // Invalid bytes should be replaced with replacement character
+        assert!(content.contains('\u{FFFD}'));
     }
 }

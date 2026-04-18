@@ -58,7 +58,7 @@ fn format_xml(entries: &[FileEntry], config: &Config) -> Result<String, PctxErro
         let display_path = entry.display_path(config.absolute_paths);
 
         // Escape path for XML attribute
-        let escaped_path = escape_xml_attr(display_path);
+        let escaped_path = escape_xml_attr(&display_path);
         output.push_str(&format!(
             "  <file path=\"{}\" language=\"{}\">\n",
             escaped_path,

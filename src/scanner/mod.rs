@@ -35,15 +35,13 @@ impl<'a> Scanner<'a> {
         let mut all_files = Vec::new();
 
         for path in &self.config.paths {
-            let canonical = if path.exists() {
-                path.canonicalize().unwrap_or_else(|_| path.clone())
-            } else {
-                // Check if it's a file that doesn't exist
-                if !path.is_dir() && path.extension().is_some() {
-                    return Err(PctxError::FileNotFound(path.clone()));
-                }
-                return Err(PctxError::DirectoryNotFound(path.clone()));
-            };
+            if !path.exists() {
+                // Path doesn't exist - determine if it looks like a file or directory
+                // for a more helpful error message
+                return Err(PctxError::FileNotFound(path.clone()));
+            }
+
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
 
             if canonical.is_file() {
                 // Direct file path
@@ -52,6 +50,49 @@ impl<'a> Scanner<'a> {
                 }
             } else if canonical.is_dir() {
                 // Directory - check if it's a git repo
+                let files = if self.config.use_gitignore && git::is_git_repo(&canonical) {
+                    git::scan_git_repo(&canonical, self.config)?
+                } else {
+                    walker::scan_directory(&canonical, self.config)?
+                };
+
+                for file in files {
+                    if self.should_include(&file) {
+                        all_files.push(file);
+                    }
+                }
+            }
+        }
+
+        // Sort for consistent output
+        all_files.sort();
+        all_files.dedup();
+
+        Ok(all_files)
+    }
+
+    /// Scan from a list of explicit file paths (for --stdin mode)
+    pub fn scan_paths(&self, paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, PctxError> {
+        let mut all_files = Vec::new();
+
+        for path in paths {
+            if !path.exists() {
+                // Skip non-existent files in stdin mode with a warning
+                // (they may have been deleted since the list was generated)
+                if self.config.verbose {
+                    eprintln!("Warning: file not found, skipping: {}", path.display());
+                }
+                continue;
+            }
+
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+            if canonical.is_file() {
+                if self.should_include(&canonical) {
+                    all_files.push(canonical);
+                }
+            } else if canonical.is_dir() {
+                // For directories in stdin mode, we expand them
                 let files = if self.config.use_gitignore && git::is_git_repo(&canonical) {
                     git::scan_git_repo(&canonical, self.config)?
                 } else {

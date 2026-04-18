@@ -1,4 +1,9 @@
 //! Gitignore-style pattern matching.
+//!
+//! This module provides pattern matching similar to gitignore, with some limitations:
+//! - Negation patterns (starting with `!`) are not supported
+//! - Character classes `[abc]` depend on glob crate support
+//! - Some edge cases with `**/` patterns may differ from git behavior
 
 use glob::Pattern;
 use std::path::Path;
@@ -112,9 +117,12 @@ fn compile_pattern(pattern: &str) -> Option<CompiledPattern> {
         return None;
     }
 
-    // Handle negation (not fully supported yet, just skip)
+    // Handle negation (not supported - warn user)
     if trimmed.starts_with('!') {
-        // TODO: Support negation patterns
+        eprintln!(
+            "Warning: negation patterns are not supported, ignoring: {}",
+            trimmed
+        );
         return None;
     }
 
@@ -122,8 +130,8 @@ fn compile_pattern(pattern: &str) -> Option<CompiledPattern> {
     let clean = trimmed.trim_end_matches('/');
 
     // Handle root-anchored patterns (starting with /)
-    let (anchored, pattern_body) = if clean.starts_with('/') {
-        (true, &clean[1..])
+    let (anchored, pattern_body) = if let Some(stripped) = clean.strip_prefix('/') {
+        (true, stripped)
     } else {
         (false, clean)
     };
@@ -200,5 +208,20 @@ mod tests {
     fn test_empty_pattern_ignored() {
         let result = compile_pattern("   ");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_double_star_pattern() {
+        let matcher = PatternMatcher::new(&["**/test/**".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("src/test/file.rs")));
+        assert!(matcher.is_excluded(&PathBuf::from("test/file.rs")));
+    }
+
+    #[test]
+    fn test_extension_with_path() {
+        let matcher = PatternMatcher::new(&["**/*.test.ts".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("src/app.test.ts")));
+        assert!(matcher.is_excluded(&PathBuf::from("app.test.ts")));
+        assert!(!matcher.is_excluded(&PathBuf::from("app.ts")));
     }
 }

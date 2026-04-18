@@ -1,42 +1,47 @@
-//! Content processing and transformation.
+//! Content reading and processing.
 
 pub mod reader;
 pub mod truncator;
 
 use std::path::{Path, PathBuf};
 
+pub use reader::read_file_contents;
+pub use truncator::truncate_content;
+
 use crate::config::Config;
 use crate::error::PctxError;
-use crate::filter::binary::{check_binary, BinaryCheckResult};
+use crate::filter::binary;
 
-/// A processed file entry ready for output
+/// Represents a processed file with its content and metadata
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     /// Absolute path to the file
     pub absolute_path: PathBuf,
-    /// Path relative to working directory
+    /// Relative path (for display)
     pub relative_path: String,
-    /// File extension (without dot)
+    /// File extension (empty string if none)
     pub extension: String,
-    /// Processed content (possibly truncated)
-    pub content: String,
-    /// Original line count before truncation
-    pub original_lines: usize,
-    /// Original size in bytes
+    /// Original file size in bytes
     pub original_bytes: usize,
-    /// Whether content was truncated
+    /// Original number of lines
+    pub original_lines: usize,
+    /// Number of lines in the processed content
+    pub line_count: usize,
+    /// Whether the content was truncated
     pub truncated: bool,
-    /// Number of lines removed by truncation
+    /// Number of lines that were truncated
     pub truncated_lines: usize,
+    /// The processed content
+    pub content: String,
 }
 
 impl FileEntry {
-    /// Get the display path based on configuration
-    pub fn display_path(&self, absolute: bool) -> &str {
+    /// Get the display path as a string
+    pub fn display_path(&self, absolute: bool) -> String {
         if absolute {
-            self.absolute_path.to_str().unwrap_or(&self.relative_path)
+            self.absolute_path.to_string_lossy().to_string()
         } else {
-            &self.relative_path
+            self.relative_path.clone()
         }
     }
 }
@@ -54,86 +59,43 @@ impl<'a> ContentProcessor<'a> {
 
     /// Process a file and return a FileEntry
     pub fn process(&self, path: &Path) -> Result<FileEntry, PctxError> {
-        // Check if binary (with proper error handling)
-        match check_binary(path) {
-            BinaryCheckResult::Binary => {
-                return Err(PctxError::BinaryFile(path.to_path_buf()));
-            }
-            BinaryCheckResult::Error(e) => {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    return Err(PctxError::PermissionDenied(path.to_path_buf()));
-                }
-                return Err(PctxError::Io(e));
-            }
-            BinaryCheckResult::Text => {}
+        // Check if binary
+        if binary::is_binary(path) {
+            return Err(PctxError::BinaryFile(path.to_path_buf()));
         }
 
         // Read content
-        let raw_content = reader::read_file(path)?;
-        let original_lines = raw_content.lines().count();
+        let raw_content = read_file_contents(path, None)?;
         let original_bytes = raw_content.len();
+        let original_lines = raw_content.lines().count();
 
         // Truncate if needed
         let (content, truncated, truncated_lines) =
-            truncator::truncate_content(&raw_content, &self.config.truncation);
+            truncate_content(&raw_content, &self.config.truncation);
 
-        // Get absolute and relative paths
-        let (absolute_path, relative_path) = self.get_paths(path);
+        let line_count = content.lines().count();
 
-        // Get extension
+        // Compute relative path
+        let relative_path = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| path.to_path_buf());
+
         let extension = path
             .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_string();
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
 
         Ok(FileEntry {
-            absolute_path,
-            relative_path,
+            absolute_path: path.to_path_buf(),
+            relative_path: relative_path.to_string_lossy().to_string(),
             extension,
-            content,
-            original_lines,
             original_bytes,
+            original_lines,
+            line_count,
             truncated,
             truncated_lines,
+            content,
         })
-    }
-
-    /// Get both absolute and relative paths for a file
-    fn get_paths(&self, path: &Path) -> (PathBuf, String) {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-        // Canonicalize cwd to handle symlinks - when cwd is accessed via a symlink,
-        // file paths from the scanner will be relative to the resolved (real) path,
-        // not the symlink path. We need both to resolve to compare them.
-        let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.clone());
-
-        // Try to canonicalize to get absolute path
-        let absolute_path = path.canonicalize().unwrap_or_else(|_| {
-            // If canonicalize fails, try to make it absolute
-            if path.is_absolute() {
-                path.to_path_buf()
-            } else {
-                canonical_cwd.join(path)
-            }
-        });
-
-        // Normalize paths using dunce to handle Windows long path format (\\?\...)
-        // This ensures consistent path format for comparison
-        let normalized_abs = dunce::simplified(&absolute_path);
-        let normalized_cwd = dunce::simplified(&canonical_cwd);
-
-        // Try to get relative path by stripping cwd prefix
-        let relative_path = if let Ok(relative) = normalized_abs.strip_prefix(normalized_cwd) {
-            relative.to_string_lossy().to_string()
-        } else if !path.is_absolute() {
-            // If strip_prefix fails and input was relative, use input as relative
-            path.to_string_lossy().to_string()
-        } else {
-            // Last resort: use normalized absolute path (without \\?\ prefix)
-            normalized_abs.to_string_lossy().to_string()
-        };
-
-        (absolute_path, relative_path)
     }
 }

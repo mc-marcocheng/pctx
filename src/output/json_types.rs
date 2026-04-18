@@ -20,6 +20,9 @@ pub mod error_codes {
     pub const CONFIG_ERROR: &str = "config_error";
     pub const CLIPBOARD_ERROR: &str = "clipboard_error";
     pub const IO_ERROR: &str = "io_error";
+    pub const JSON_ERROR: &str = "json_error";
+    pub const WALK_ERROR: &str = "walk_error";
+    pub const IGNORE_ERROR: &str = "ignore_error";
 }
 
 /// Top-level JSON response wrapper
@@ -69,12 +72,19 @@ pub struct TreeOutput {
     pub tree: String,
 }
 
+/// Helper function for serde skip_serializing_if
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 /// Flat file information structure (agent-friendly)
 #[derive(Serialize, Debug, Clone)]
 pub struct FileInfo {
     pub path: String,
     pub extension: String,
     pub size_bytes: u64,
+    /// Line count (0 if not calculated, e.g., in `files list`)
+    #[serde(skip_serializing_if = "is_zero")]
     pub line_count: usize,
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,6 +93,8 @@ pub struct FileInfo {
 
 impl FileInfo {
     /// Try to create FileInfo from a path without reading full content
+    ///
+    /// Note: `line_count` will be 0 as content is not read.
     pub fn try_from_path(path: &Path) -> Result<Self, std::io::Error> {
         let metadata = std::fs::metadata(path)?;
 
@@ -101,7 +113,7 @@ impl FileInfo {
             path: relative_path.to_string_lossy().to_string(),
             extension,
             size_bytes: metadata.len(),
-            line_count: 0, // Not calculated without reading
+            line_count: 0, // Not calculated without reading content
             truncated: false,
             truncated_lines: None,
         })
@@ -137,7 +149,7 @@ impl FileInfo {
 }
 
 /// Statistics in JSON format
-#[derive(Serialize, Debug, Default, Clone)]
+#[derive(Serialize, Debug, Clone)]
 pub struct StatsJson {
     pub file_count: usize,
     pub total_lines: usize,
@@ -147,6 +159,21 @@ pub struct StatsJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_estimate: Option<usize>,
     pub duration_ms: u64,
+}
+
+impl StatsJson {
+    /// Create a new StatsJson with minimal required fields
+    pub fn new(file_count: usize) -> Self {
+        Self {
+            file_count,
+            total_lines: 0,
+            total_bytes: 0,
+            truncated_count: 0,
+            skipped_count: 0,
+            token_estimate: None,
+            duration_ms: 0,
+        }
+    }
 }
 
 impl From<&Stats> for StatsJson {

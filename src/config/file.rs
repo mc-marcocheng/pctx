@@ -93,7 +93,7 @@ pub fn load_config(path: &Path) -> Result<FileConfig, PctxError> {
 /// Write a template configuration file (atomic write with force option)
 pub fn write_template(path: &Path, force: bool) -> Result<(), PctxError> {
     let template = r#"# pctx configuration file
-# See https://github.com/yourusername/pctx for documentation
+# See https://github.com/mc-marcocheng/pctx for documentation
 
 # Additional patterns to exclude (gitignore-style)
 exclude = [

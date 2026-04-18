@@ -7,8 +7,7 @@ use crate::error::PctxError;
 pub fn write(content: &str) -> Result<(), PctxError> {
     use arboard::Clipboard;
 
-    let mut clipboard =
-        Clipboard::new().map_err(|e| PctxError::ClipboardError(e.to_string()))?;
+    let mut clipboard = Clipboard::new().map_err(|e| PctxError::ClipboardError(e.to_string()))?;
 
     clipboard
         .set_text(content)

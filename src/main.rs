@@ -2,7 +2,8 @@
 //!
 //! This is the main entry point for the CLI application.
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -14,7 +15,7 @@ use pctx::error::PctxError;
 use pctx::exit_codes::exit;
 use pctx::output::json_types::{
     error_codes, ContextOutput, ErrorResponse, FileError, FileInfo, JsonResponse, PartialResponse,
-    ResponseData, SuccessResponse, TreeOutput,
+    ResponseData, StatsJson, SuccessResponse, TreeOutput,
 };
 use pctx::output::{clipboard, file, formatter, tree};
 use pctx::scanner::Scanner;
@@ -74,9 +75,17 @@ fn run_generate_command(
     let config = Config::from_args(args, global)?;
     let start_time = std::time::Instant::now();
 
-    // Scan for files
+    // Scan for files (either from paths or stdin)
     let scanner = Scanner::new(&config);
-    let files = scanner.scan()?;
+    let files = if args.stdin {
+        let paths = read_paths_from_stdin()?;
+        if paths.is_empty() {
+            return handle_no_files_matched(args, global);
+        }
+        scanner.scan_paths(paths)?
+    } else {
+        scanner.scan()?
+    };
 
     if files.is_empty() {
         return handle_no_files_matched(args, global);
@@ -110,7 +119,20 @@ fn run_generate_command(
 
     // Dry run - just show what would happen
     if args.dry_run {
-        return handle_dry_run(&entries, &file_errors, &stats, global, config.absolute_paths);
+        // Estimate tokens for dry run display
+        let sample_content = entries
+            .iter()
+            .map(|e| e.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        stats.estimate_tokens(&sample_content, &args.token_model);
+        return handle_dry_run(
+            &entries,
+            &file_errors,
+            &stats,
+            global,
+            config.absolute_paths,
+        );
     }
 
     // Format output
@@ -180,6 +202,22 @@ fn run_generate_command(
     })
 }
 
+/// Read file paths from stdin, one per line
+fn read_paths_from_stdin() -> Result<Vec<PathBuf>, PctxError> {
+    let stdin = io::stdin();
+    let mut paths = Vec::new();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            paths.push(PathBuf::from(trimmed));
+        }
+    }
+
+    Ok(paths)
+}
+
 fn handle_no_files_matched(
     args: &pctx::cli::GenerateArgs,
     global: &pctx::cli::GlobalArgs,
@@ -192,10 +230,9 @@ fn handle_no_files_matched(
                 "paths": args.paths,
                 "exclude": args.filter.exclude,
                 "include": args.filter.include,
+                "stdin": args.stdin,
             })),
-            suggestion: Some(
-                "Try broadening your filters or checking the paths exist".to_string(),
-            ),
+            suggestion: Some("Try broadening your filters or checking the paths exist".to_string()),
             transient: false,
             exit_code: exit::NO_MATCH,
         });
@@ -256,15 +293,7 @@ fn run_files_command(
 
                 let response = JsonResponse::Success(SuccessResponse {
                     data: ResponseData::FileList(file_infos),
-                    stats: pctx::output::json_types::StatsJson {
-                        file_count: files.len(),
-                        total_lines: 0,
-                        total_bytes: 0,
-                        truncated_count: 0,
-                        skipped_count: 0,
-                        token_estimate: None,
-                        duration_ms: 0,
-                    },
+                    stats: StatsJson::new(files.len()),
                 });
                 println!("{}", serde_json::to_string_pretty(&response)?);
             } else {
@@ -291,10 +320,7 @@ fn run_files_command(
                     data: ResponseData::Tree(TreeOutput {
                         tree: tree::tree_to_string(&tree_struct),
                     }),
-                    stats: pctx::output::json_types::StatsJson {
-                        file_count: files.len(),
-                        ..Default::default()
-                    },
+                    stats: StatsJson::new(files.len()),
                 });
                 println!("{}", serde_json::to_string_pretty(&response)?);
             } else {

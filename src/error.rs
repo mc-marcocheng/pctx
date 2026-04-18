@@ -80,9 +80,10 @@ impl PctxError {
             Self::GitError(_) => error_codes::GIT_ERROR,
             Self::ConfigError(_) | Self::Toml(_) | Self::TomlSer(_) => error_codes::CONFIG_ERROR,
             Self::ClipboardError(_) => error_codes::CLIPBOARD_ERROR,
-            Self::Io(_) | Self::Json(_) | Self::WalkDir(_) | Self::Ignore(_) => {
-                error_codes::IO_ERROR
-            }
+            Self::Io(_) => error_codes::IO_ERROR,
+            Self::Json(_) => error_codes::JSON_ERROR,
+            Self::WalkDir(_) => error_codes::WALK_ERROR,
+            Self::Ignore(_) => error_codes::IGNORE_ERROR,
         }
     }
 
@@ -121,18 +122,34 @@ impl PctxError {
             Self::InvalidPattern { .. } | Self::Pattern(_) => {
                 Some("Check that the pattern follows gitignore syntax")
             }
-            Self::EncodingError { .. } => {
-                Some("File may be binary or use an unsupported encoding")
-            }
+            Self::EncodingError { .. } => Some("File may be binary or use an unsupported encoding"),
             Self::GitError(_) => Some("Ensure you're in a git repository or use --no-gitignore"),
             Self::ConfigError(_) | Self::Toml(_) => {
                 Some("Check your .pctx.toml file for syntax errors")
             }
-            Self::ClipboardError(_) => {
-                Some("Clipboard access may require a display server on Linux")
-            }
+            Self::ClipboardError(_) => Some(Self::clipboard_suggestion()),
             Self::Io(_) => Some("This may be a temporary issue; try again"),
             _ => None,
+        }
+    }
+
+    /// Platform-specific clipboard error suggestion
+    fn clipboard_suggestion() -> &'static str {
+        #[cfg(target_os = "linux")]
+        {
+            "Clipboard access may require a display server (X11/Wayland) on Linux"
+        }
+        #[cfg(target_os = "macos")]
+        {
+            "Check that the application has permission to access the clipboard"
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "Clipboard may be locked by another application"
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
+            "Clipboard access failed; try writing to a file instead"
         }
     }
 

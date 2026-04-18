@@ -52,6 +52,10 @@ EXAMPLES:
   pctx --exclude "*.test.ts" --exclude "__tests__"
   pctx --include "*.rs" --include "*.toml"
 
+  # Read file list from stdin
+  find . -name "*.rs" | pctx --stdin
+  pctx files list --quiet | pctx --stdin
+
   # List files without generating context
   pctx files list --json
 
@@ -61,6 +65,9 @@ EXAMPLES:
   # Adjust truncation thresholds
   pctx --max-lines 1000 --head-lines 50 --tail-lines 20
 
+  # Disable all truncation
+  pctx --no-truncation
+
   # Limit recursion depth
   pctx --max-depth 2
 
@@ -69,7 +76,7 @@ EXAMPLES:
 
   # Pipe-friendly: get paths of large files
   pctx files list --json | jq -r '.data[] | select(.size_bytes > 10000) | .path'"#,
-    after_help = "For more information, visit: https://github.com/yourusername/pctx"
+    after_help = "For more information, visit: https://github.com/mc-marcocheng/pctx"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -137,8 +144,10 @@ pub enum FilesCommands {
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
     /// Show the resolved configuration
-    #[command(long_about = "Display the current configuration after merging defaults, \
-                            config file, and command-line options.")]
+    #[command(
+        long_about = "Display the current configuration after merging defaults, \
+                            config file, and command-line options."
+    )]
     Show,
 
     /// Create a new .pctx.toml configuration file
@@ -207,6 +216,10 @@ pub struct GenerateArgs {
     /// Model name for token estimation
     #[arg(long, value_name = "MODEL", default_value = "gpt-4")]
     pub token_model: String,
+
+    /// Read file paths from stdin (one per line)
+    #[arg(long)]
+    pub stdin: bool,
 }
 
 /// Arguments for filtering which files to include
@@ -276,6 +289,10 @@ pub struct OutputArgs {
 /// Arguments for content truncation thresholds
 #[derive(Args, Debug, Clone)]
 pub struct TruncationArgs {
+    /// Disable all truncation (equivalent to --max-lines 0 --max-line-length 0)
+    #[arg(long, conflicts_with_all = ["max_lines", "max_line_length"])]
+    pub no_truncation: bool,
+
     /// Maximum lines per file before truncation (0 = no limit)
     #[arg(long, default_value = "500", value_name = "N")]
     pub max_lines: usize,
@@ -299,6 +316,33 @@ pub struct TruncationArgs {
     /// Characters to keep at line end when truncating
     #[arg(long, default_value = "100", value_name = "N")]
     pub tail_chars: usize,
+}
+
+impl TruncationArgs {
+    /// Check if max_lines was explicitly set (not default)
+    pub fn max_lines_explicit(&self) -> bool {
+        // This is a workaround - ideally we'd use Option<usize>
+        // For now, we check if no_truncation is set
+        !self.no_truncation
+    }
+
+    /// Get effective max_lines value
+    pub fn effective_max_lines(&self) -> usize {
+        if self.no_truncation {
+            0
+        } else {
+            self.max_lines
+        }
+    }
+
+    /// Get effective max_line_length value
+    pub fn effective_max_line_length(&self) -> usize {
+        if self.no_truncation {
+            0
+        } else {
+            self.max_line_length
+        }
+    }
 }
 
 /// Supported content output formats

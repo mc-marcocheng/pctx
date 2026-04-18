@@ -1,59 +1,75 @@
-//! Git-aware file scanning using the `ignore` crate.
+//! Git-aware file scanning.
 
 use std::path::{Path, PathBuf};
-
-use ignore::WalkBuilder;
+use std::process::Command;
 
 use crate::config::Config;
 use crate::error::PctxError;
+use crate::filter::binary;
 
-/// Check if a directory is inside a git repository
+/// Check if a path is the root of a git repository
+///
+/// Only returns true if the path itself contains a .git directory,
+/// not if it's merely inside a git repository.
 pub fn is_git_repo(path: &Path) -> bool {
-    let start = if path.is_file() {
-        path.parent().map(|p| p.to_path_buf())
-    } else {
-        Some(path.to_path_buf())
-    };
-
-    let mut current = start;
-
-    while let Some(dir) = current {
-        if dir.join(".git").exists() {
-            return true;
-        }
-        current = dir.parent().map(|p| p.to_path_buf());
-    }
-
-    false
+    path.join(".git").exists()
 }
 
-/// Scan a git repository, respecting .gitignore rules
-pub fn scan_git_repo(path: &Path, config: &Config) -> Result<Vec<PathBuf>, PctxError> {
-    let mut builder = WalkBuilder::new(path);
+/// Scan a git repository using git ls-files
+pub fn scan_git_repo(dir: &Path, config: &Config) -> Result<Vec<PathBuf>, PctxError> {
+    let output = Command::new("git")
+        .arg("ls-files")
+        .arg("--cached")
+        .arg("--others")
+        .arg("--exclude-standard")
+        .current_dir(dir)
+        .output()
+        .map_err(|e| PctxError::GitError(format!("Failed to run git: {}", e)))?;
 
-    builder
-        .hidden(!config.include_hidden)
-        .git_ignore(config.use_gitignore)
-        .git_global(config.use_gitignore)
-        .git_exclude(config.use_gitignore)
-        .ignore(true)
-        .parents(true)
-        .follow_links(false) // Explicit: don't follow symlinks to prevent loops
-        .same_file_system(true); // Don't cross filesystem boundaries
-
-    if let Some(max_depth) = config.max_depth {
-        builder.max_depth(Some(max_depth));
+    if !output.status.success() {
+        return Err(PctxError::GitError(format!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut files = Vec::new();
 
-    for entry in builder.build() {
-        let entry = entry?;
-        let path = entry.path();
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
 
-        // Only include files (not directories)
+        let path = dir.join(line);
+
+        // Apply hidden filter
+        if !config.include_hidden {
+            let is_hidden = path
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+            if is_hidden {
+                continue;
+            }
+        }
+
+        // Apply depth filter
+        if let Some(max_depth) = config.max_depth {
+            let depth = path
+                .strip_prefix(dir)
+                .map(|p| p.components().count())
+                .unwrap_or(0);
+            if depth > max_depth {
+                continue;
+            }
+        }
+
         if path.is_file() {
-            files.push(path.to_path_buf());
+            // Skip binary files early
+            if binary::is_binary(&path) {
+                continue;
+            }
+            files.push(path);
         }
     }
 

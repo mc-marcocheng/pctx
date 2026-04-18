@@ -1,0 +1,36 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.26.0
+    hooks:
+      - id: typos
+
+  - repo: local
+    hooks:
+      - id: fmt
+        name: cargo fmt
+        entry: cargo fmt --all
+        language: rust
+        pass_filenames: false
+        types: [rust]
+
+      - id: clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: rust
+        pass_filenames: false
+        types: [rust]
+
+      - id: test
+        name: cargo test
+        entry: cargo test --all-targets --all-features
+        language: rust
+        pass_filenames: false
+        types: [rust]

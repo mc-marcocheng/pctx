@@ -19,7 +19,9 @@ pub fn truncate_content(content: &str, config: &TruncationConfig) -> (String, bo
     let processed_lines: Vec<String> = if config.max_lines > 0 && total_lines > config.max_lines {
         truncated = true;
         let head_count = config.head_lines.min(total_lines);
-        let tail_count = config.tail_lines.min(total_lines.saturating_sub(head_count));
+        let tail_count = config
+            .tail_lines
+            .min(total_lines.saturating_sub(head_count));
         let tail_start = total_lines.saturating_sub(tail_count);
 
         truncated_lines = total_lines.saturating_sub(head_count + tail_count);
@@ -31,7 +33,10 @@ pub fn truncate_content(content: &str, config: &TruncationConfig) -> (String, bo
 
         if truncated_lines > 0 {
             // Single line marker without extra newlines (join handles spacing)
-            result.push(format!("... [{} {}] ...", truncated_lines, LINES_OMITTED_MARKER));
+            result.push(format!(
+                "... [{} {}] ...",
+                truncated_lines, LINES_OMITTED_MARKER
+            ));
         }
 
         result.extend(tail.iter().map(|s| s.to_string()));
@@ -69,7 +74,9 @@ fn truncate_line(line: &str, config: &TruncationConfig) -> String {
 
     let chars: Vec<char> = line.chars().collect();
     let head_count = config.head_chars.min(chars.len());
-    let tail_count = config.tail_chars.min(chars.len().saturating_sub(head_count));
+    let tail_count = config
+        .tail_chars
+        .min(chars.len().saturating_sub(head_count));
 
     let head: String = chars[..head_count].iter().collect();
     let tail_start = chars.len().saturating_sub(tail_count);
@@ -177,7 +184,7 @@ mod tests {
         };
 
         let content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10";
-        let (result, truncated, _) = truncate_content(&content, &config);
+        let (result, truncated, _) = truncate_content(content, &config);
 
         assert!(truncated);
         // Check that there are no double newlines around the marker

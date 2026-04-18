@@ -40,10 +40,10 @@ impl Default for TruncationConfig {
 impl From<&TruncationArgs> for TruncationConfig {
     fn from(args: &TruncationArgs) -> Self {
         Self {
-            max_lines: args.max_lines,
+            max_lines: args.effective_max_lines(),
             head_lines: args.head_lines,
             tail_lines: args.tail_lines,
-            max_line_length: args.max_line_length,
+            max_line_length: args.effective_max_line_length(),
             head_chars: args.head_chars,
             tail_chars: args.tail_chars,
         }
@@ -73,12 +73,12 @@ pub struct Config {
 impl Config {
     /// Build configuration from generate command arguments
     pub fn from_args(args: &GenerateArgs, global: &GlobalArgs) -> Result<Self, PctxError> {
-        let file_config = file::find_and_load().ok();
+        let file_config = Self::load_file_config(global)?;
 
         let (exclude_patterns, include_patterns) =
             Self::build_patterns(&args.filter, file_config.as_ref());
 
-        // Merge truncation settings
+        // Merge truncation settings: CLI args override file config
         let truncation = Self::build_truncation(&args.truncation, file_config.as_ref());
 
         Ok(Self {
@@ -106,7 +106,7 @@ impl Config {
 
     /// Build configuration from filter arguments only (for subcommands)
     pub fn from_filter_args(filter: &FilterArgs, global: &GlobalArgs) -> Result<Self, PctxError> {
-        let file_config = file::find_and_load().ok();
+        let file_config = Self::load_file_config(global)?;
 
         let (exclude_patterns, include_patterns) =
             Self::build_patterns(filter, file_config.as_ref());
@@ -132,6 +132,22 @@ impl Config {
             verbose: global.verbose,
             quiet: global.quiet,
         })
+    }
+
+    /// Load file configuration with proper error handling
+    fn load_file_config(global: &GlobalArgs) -> Result<Option<file::FileConfig>, PctxError> {
+        match file::find_and_load() {
+            Ok(cfg) => Ok(Some(cfg)),
+            Err(PctxError::FileNotFound(_)) => Ok(None), // No config file is fine
+            Err(e) => {
+                // Config file exists but has errors
+                if !global.quiet {
+                    eprintln!("Warning: failed to load config file: {}", e);
+                }
+                // Continue without config file rather than failing
+                Ok(None)
+            }
+        }
     }
 
     /// Build exclude and include patterns from filter args and file config
@@ -168,21 +184,59 @@ impl Config {
     }
 
     /// Build truncation config from args and file config
+    /// CLI args take precedence over file config
     fn build_truncation(
         args: &TruncationArgs,
         file_config: Option<&file::FileConfig>,
     ) -> TruncationConfig {
-        if let Some(fc) = file_config {
-            TruncationConfig {
-                max_lines: fc.max_lines.unwrap_or(args.max_lines),
-                head_lines: fc.head_lines.unwrap_or(args.head_lines),
-                tail_lines: fc.tail_lines.unwrap_or(args.tail_lines),
-                max_line_length: fc.max_line_length.unwrap_or(args.max_line_length),
-                head_chars: fc.head_chars.unwrap_or(args.head_chars),
-                tail_chars: fc.tail_chars.unwrap_or(args.tail_chars),
-            }
-        } else {
-            TruncationConfig::from(args)
+        let defaults = TruncationConfig::default();
+
+        // If --no-truncation is set, ignore everything else
+        if args.no_truncation {
+            return TruncationConfig {
+                max_lines: 0,
+                max_line_length: 0,
+                ..defaults
+            };
+        }
+
+        // CLI args override file config, file config overrides defaults
+        // We detect "explicit" CLI args by checking if they differ from defaults
+        // (This is a limitation - ideally clap would tell us if a flag was set)
+        let fc = file_config;
+
+        TruncationConfig {
+            max_lines: if args.max_lines != defaults.max_lines {
+                args.max_lines
+            } else {
+                fc.and_then(|f| f.max_lines).unwrap_or(args.max_lines)
+            },
+            head_lines: if args.head_lines != defaults.head_lines {
+                args.head_lines
+            } else {
+                fc.and_then(|f| f.head_lines).unwrap_or(args.head_lines)
+            },
+            tail_lines: if args.tail_lines != defaults.tail_lines {
+                args.tail_lines
+            } else {
+                fc.and_then(|f| f.tail_lines).unwrap_or(args.tail_lines)
+            },
+            max_line_length: if args.max_line_length != defaults.max_line_length {
+                args.max_line_length
+            } else {
+                fc.and_then(|f| f.max_line_length)
+                    .unwrap_or(args.max_line_length)
+            },
+            head_chars: if args.head_chars != defaults.head_chars {
+                args.head_chars
+            } else {
+                fc.and_then(|f| f.head_chars).unwrap_or(args.head_chars)
+            },
+            tail_chars: if args.tail_chars != defaults.tail_chars {
+                args.tail_chars
+            } else {
+                fc.and_then(|f| f.tail_chars).unwrap_or(args.tail_chars)
+            },
         }
     }
 }
