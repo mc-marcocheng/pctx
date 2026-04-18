@@ -1,7 +1,7 @@
 # pctx
 
 <p align="center">
-  <img src="assets/pctx-carbon.png" alt="pctx demo" width="600">
+  <img src="https://github.com/mc-marcocheng/pctx/blob/master/assets/pctx-carbon.png?raw=true" alt="pctx demo" width="600">
 </p>
 
 Generate LLM-ready context from your codebase. Intelligently packages source files with proper formatting, truncation, and filtering for optimal AI assistant consumption.

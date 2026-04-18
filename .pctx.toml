@@ -5,6 +5,7 @@
 exclude = [
     "CONTRIBUTING.md",
     "LICENSE",
+    "assets/",
 ]
 
 # Only include files matching these patterns (empty = include all)
