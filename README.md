@@ -1,17 +1,17 @@
 # pctx
 
-Generate LLM-ready context from your codebase.
-
-`pctx` scans your project, respects `.gitignore`, filters files intelligently, and outputs formatted context ready to paste into ChatGPT, Claude, or any other LLM.
+Generate LLM-ready context from your codebase. Intelligently packages source files with proper formatting, truncation, and filtering for optimal AI assistant consumption.
 
 ## Features
 
-- 🚀 **Fast** - Built in Rust, handles large codebases efficiently
-- 🎯 **Smart filtering** - Respects `.gitignore`, excludes binary files, configurable patterns
-- 📋 **Multiple outputs** - Stdout, clipboard, or file
-- 🔧 **Flexible formats** - Markdown, XML, or plain text
-- 📊 **Token estimation** - Know your context size before pasting
-- 🤖 **Agent-friendly** - JSON output with structured errors and exit codes
+- **Smart file discovery**: Respects `.gitignore`, excludes binary files, and filters common non-source directories
+- **Multiple output formats**: Markdown (default), XML, and plain text
+- **Intelligent truncation**: Preserves file head and tail when truncating large files
+- **Flexible filtering**: Include/exclude patterns with gitignore-style syntax
+- **Multiple destinations**: stdout, clipboard, or file output
+- **JSON mode**: Structured output for programmatic use and CI/CD integration
+- **Stdin support**: Read file lists from pipes for integration with other tools
+- **Token estimation**: Approximate token counts for various LLM models
 
 ## Installation
 
@@ -22,7 +22,7 @@ cargo install pctx
 Or build from source:
 
 ```bash
-git clone https://github.com/yourusername/pctx
+git clone https://github.com/mc-marcocheng/pctx
 cd pctx
 cargo build --release
 ```
@@ -36,236 +36,264 @@ pctx
 # Copy to clipboard
 pctx --clipboard
 
-# Save to file
+# Write to file
 pctx --output context.md
 
-# JSON output for scripts/agents
+# JSON output for scripts
 pctx --json
 
-# Include specific files only
+# Filter specific files
 pctx --include "*.rs" --include "*.toml"
-
-# Exclude test files
 pctx --exclude "*.test.ts" --exclude "__tests__"
+
+# Pipe file list from other tools
+find . -name "*.rs" -mtime -7 | pctx --stdin
+pctx files list --quiet | grep -v test | pctx --stdin
+
+# Preview without generating
+pctx --dry-run
+
+# Include file tree in output
+pctx --tree
+
+# Disable truncation for full file contents
+pctx --no-truncation
 ```
 
 ## Usage
 
-### Basic Usage
+### Basic Commands
 
 ```bash
-# Current directory (default)
-pctx
+# Default: generate context from current directory
+pctx [OPTIONS] [PATHS...]
 
-# Specific paths
-pctx src/ lib/
+# List files that would be included
+pctx files list [OPTIONS]
 
-# Single file
-pctx src/main.rs
+# Show file tree structure
+pctx files tree [OPTIONS]
+
+# Configuration management
+pctx config show      # Show current config
+pctx config init      # Create .pctx.toml
+pctx config defaults  # List default excludes
+
+# Generate shell completions
+pctx completions bash
+pctx completions zsh
+pctx completions fish
 ```
 
 ### Output Options
 
+| Flag | Description |
+|------|-------------|
+| `--clipboard`, `-c` | Copy output to system clipboard |
+| `--output FILE`, `-o` | Write to file (use `--force` to overwrite) |
+| `--format`, `-f` | Output format: `markdown`, `xml`, `plain` |
+| `--tree`, `-t` | Include file tree at beginning of output |
+| `--stats`, `-s` | Show statistics summary |
+| `--json` | Structured JSON output (for scripts) |
+| `--stdin` | Read file paths from stdin (one per line) |
+
+### Filtering Options
+
+| Flag | Description |
+|------|-------------|
+| `--exclude PATTERN`, `-e` | Exclude files matching pattern (repeatable) |
+| `--include PATTERN`, `-i` | Include only files matching pattern (repeatable) |
+| `--hidden` | Include hidden files (starting with `.`) |
+| `--no-default-excludes` | Disable built-in exclusions |
+| `--no-gitignore` | Ignore `.gitignore` rules |
+| `--max-size KB` | Maximum file size in KB (default: 1024) |
+| `--max-depth N`, `-d` | Limit directory recursion depth |
+
+### Truncation Options
+
+| Flag | Description |
+|------|-------------|
+| `--no-truncation` | Disable all truncation |
+| `--max-lines N` | Max lines per file before truncating (default: 500, 0 = unlimited) |
+| `--head-lines N` | Lines to keep at file start (default: 20) |
+| `--tail-lines N` | Lines to keep at file end (default: 10) |
+| `--max-line-length N` | Max chars per line (default: 500, 0 = unlimited) |
+| `--head-chars N` | Chars to keep at line start (default: 200) |
+| `--tail-chars N` | Chars to keep at line end (default: 100) |
+
+### Stdin Mode
+
+The `--stdin` flag allows reading file paths from standard input, enabling powerful integrations:
+
 ```bash
-# To clipboard (requires clipboard feature)
-pctx --clipboard
+# Process only recently modified Rust files
+find . -name "*.rs" -mtime -1 | pctx --stdin
 
-# To file (fails if exists)
-pctx --output context.md
+# Process files from a list
+cat files_to_review.txt | pctx --stdin
 
-# To file (overwrite if exists)
-pctx --output context.md --force
+# Chain with pctx's own file listing
+pctx files list --quiet | grep -v _test | pctx --stdin
 
-# Different formats
-pctx --format markdown  # Default
-pctx --format xml
-pctx --format plain
+# Use with git to process only changed files
+git diff --name-only HEAD~5 | pctx --stdin
 
-# Include file tree
-pctx --tree
-
-# Include statistics
-pctx --stats
-
-# Use absolute paths instead of relative paths
-pctx --absolute-paths
+# Process files matching complex criteria
+fd -e rs -e toml --changed-within 2weeks | pctx --stdin
 ```
 
-### Path Display
+When using `--stdin`:
+- Empty lines and whitespace-only lines are ignored
+- Non-existent files are skipped with a warning (in verbose mode)
+- Directories in the input are expanded recursively
 
-By default, pctx displays file paths relative to the current working directory:
+## Configuration
+
+### Config File
+
+Create a `.pctx.toml` file in your project root:
 
 ```bash
-# Default: relative paths
-pctx
-# Output shows: src/main.rs, src/lib.rs, etc.
-
-# Use absolute paths
-pctx --absolute-paths
-# Output shows: /home/user/project/src/main.rs, etc.
+pctx config init
 ```
 
-### Filtering
+Example configuration:
 
-```bash
-# Exclude patterns (gitignore-style)
-pctx --exclude "*.test.ts"
-pctx --exclude "**/__tests__/**"
+```toml
+# Patterns to exclude (in addition to defaults)
+exclude = [
+    "*.generated.ts",
+    "vendor/",
+    "__snapshots__",
+]
 
-# Include only matching files
-pctx --include "*.rs"
-pctx --include "*.py" --include "*.pyi"
+# Patterns to include (if specified, only these are included)
+include = [
+    "*.rs",
+    "*.toml",
+]
 
-# Include hidden files
-pctx --hidden
-
-# Disable default exclusions
-pctx --no-default-excludes
-
-# Ignore .gitignore rules
-pctx --no-gitignore
-
-# Max file size (KB)
-pctx --max-size 512
+# Truncation settings
+max_lines = 500
+head_lines = 20
+tail_lines = 10
+max_line_length = 500
 ```
 
-### Recursion Control
+Configuration is loaded from `.pctx.toml` in the current directory or any parent directory. If the config file exists but has syntax errors, a warning is printed and the file is skipped.
+
+### Configuration Precedence
+
+Settings are applied in this order (highest priority first):
+
+1. Command-line arguments
+2. Config file (`.pctx.toml`)
+3. Built-in defaults
+
+### Default Exclusions
+
+Common directories and files are excluded by default:
+
+- **Version control**: `.git`, `.svn`, `.hg`
+- **Dependencies**: `node_modules`, `vendor`, `target`, `.venv`
+- **Build outputs**: `dist`, `build`, `out`, `bin`, `obj`
+- **IDE/Editor**: `.idea`, `.vscode`, `.vs`
+- **Caches**: `__pycache__`, `.cache`, `.pytest_cache`
+- **Lock files**: `package-lock.json`, `yarn.lock`, `Cargo.lock`, etc.
+
+See all defaults with: `pctx config defaults`
+
+## Pattern Syntax
+
+Patterns follow gitignore-style syntax:
+
+| Pattern | Matches |
+|---------|---------|
+| `*.log` | All `.log` files |
+| `test_*` | Files starting with `test_` |
+| `**/tests/**` | Any `tests` directory at any level |
+| `/src/generated` | `src/generated` at root only |
+| `docs/` | `docs` directory |
+
+**Limitations:**
+- Negation patterns (`!pattern`) are not supported and will show a warning
+- Character classes (`[abc]`) depend on glob crate support
+- Some edge cases with `**/` patterns may differ from git behavior
+
+## JSON Output
+
+Use `--json` for structured output suitable for scripts and CI/CD:
 
 ```bash
-# Unlimited depth (default)
-pctx --max-depth 0
-
-# Only immediate children (no recursion)
-pctx --max-depth 1
-
-# Children and grandchildren only
-pctx --max-depth 2
-```
-
-### Truncation
-
-Large files are automatically truncated to keep context manageable:
-
-```bash
-# Max lines per file (0 = no limit)
-pctx --max-lines 500
-
-# Lines to keep at start/end when truncating
-pctx --head-lines 20 --tail-lines 10
-
-# Max characters per line
-pctx --max-line-length 500 --head-chars 200 --tail-chars 100
-```
-
-### JSON Output (for Scripts/Agents)
-
-```bash
-# Full JSON response
+# Generate context with JSON output
 pctx --json
 
 # List files as JSON
 pctx files list --json
 
-# Error responses include structured information
-pctx --json /nonexistent
-# {
-#   "status": "error",
-#   "code": "file_not_found",
-#   "message": "Directory not found: /nonexistent",
-#   "suggestion": "Check that the path exists...",
-#   "transient": false,
-#   "exit_code": 3
-# }
+# Parse with jq
+pctx --json | jq '.data.files[] | select(.truncated) | .path'
 ```
 
-JSON output includes both relative and absolute paths:
+### Response Format
 
+**Success:**
 ```json
 {
   "status": "success",
   "data": {
+    "content": "...",
+    "format": "markdown",
     "files": [
       {
         "path": "src/main.rs",
-        "absolute_path": "/home/user/project/src/main.rs",
         "extension": "rs",
         "size_bytes": 1234,
-        "line_count": 50,
+        "line_count": 45,
         "truncated": false
       }
     ]
+  },
+  "stats": {
+    "file_count": 10,
+    "total_lines": 500,
+    "total_bytes": 15000,
+    "truncated_count": 2,
+    "skipped_count": 0,
+    "token_estimate": 3500,
+    "duration_ms": 45
   }
 }
 ```
 
-### File Discovery
-
-```bash
-# List files that would be included
-pctx files list
-
-# Bare output for piping
-pctx files list --quiet
-
-# Show file tree
-pctx files tree
-
-# Combine with other tools
-pctx files list --quiet | xargs wc -l
+**Error:**
+```json
+{
+  "status": "error",
+  "code": "file_not_found",
+  "message": "File not found: src/missing.rs",
+  "input": {"path": "src/missing.rs"},
+  "suggestion": "Check that the path exists and is spelled correctly",
+  "transient": false,
+  "exit_code": 3
+}
 ```
 
-### Configuration
-
-```bash
-# Create config file
-pctx config init
-
-# Show current config
-pctx config show
-
-# Show default exclusions
-pctx config defaults
-```
-
-#### `.pctx.toml` Example
-
-```toml
-# pctx configuration file
-# See https://github.com/yourusername/pctx for documentation
-
-# Additional patterns to exclude (gitignore-style)
-exclude = [
-    "*.test.ts",
-    "*.spec.js",
-    "__tests__",
-    "*.snap",
-]
-
-# Only include files matching these patterns (empty = include all)
-# include = ["*.rs", "*.toml"]
-
-# Truncation settings for long files
-# max_lines = 500      # Max lines per file (0 = no limit)
-# head_lines = 20      # Lines to keep at start when truncating
-# tail_lines = 10      # Lines to keep at end when truncating
-
-# Truncation settings for long lines
-# max_line_length = 500  # Max chars per line (0 = no limit)
-# head_chars = 200       # Chars to keep at line start
-# tail_chars = 100       # Chars to keep at line end
-```
-
-### Shell Completions
-
-```bash
-# Bash
-pctx completions bash >> ~/.bashrc
-
-# Zsh
-pctx completions zsh >> ~/.zshrc
-
-# Fish
-pctx completions fish > ~/.config/fish/completions/pctx.fish
+**Partial Success:**
+```json
+{
+  "status": "partial",
+  "data": { ... },
+  "stats": { ... },
+  "errors": [
+    {
+      "path": "src/broken.rs",
+      "code": "permission_denied",
+      "message": "Permission denied",
+      "transient": false
+    }
+  ]
+}
 ```
 
 ## Exit Codes
@@ -277,64 +305,183 @@ pctx completions fish > ~/.config/fish/completions/pctx.fish
 | 2 | Usage error (bad arguments) |
 | 3 | File/directory not found |
 | 4 | Permission denied |
-| 5 | Conflict (file exists without --force) |
+| 5 | Conflict (output file exists) |
 | 6 | No files matched filters |
 | 7 | Partial success (some files failed) |
 
-## Error Codes (JSON)
+## Examples
 
-When using `--json`, errors include machine-readable codes:
-
-- `file_not_found` - Path does not exist
-- `permission_denied` - Cannot read file/directory
-- `binary_file` - File is binary (skipped)
-- `file_too_large` - File exceeds size limit
-- `encoding_error` - File encoding issue
-- `invalid_pattern` - Bad glob pattern
-- `no_files_matched` - No files match filters
-- `output_exists` - Output file exists (use --force)
-- `config_error` - Configuration file error
-- `clipboard_error` - Clipboard access failed
-
-## Default Exclusions
-
-pctx excludes common non-content directories and files by default:
-
-- Version control: `.git`, `.svn`, `.hg`
-- Dependencies: `node_modules`, `vendor`, `__pycache__`, `target`
-- Build outputs: `dist`, `build`, `out`
-- IDE files: `.idea`, `.vscode`
-- Binary files: Images, archives, executables (detected automatically)
-- Lock files: `package-lock.json`, `Cargo.lock`, etc.
-
-Use `pctx config defaults` to see the full list, or `--no-default-excludes` to disable.
-
-## Tips for LLM Context
-
-1. **Be specific**: Use `--include` to focus on relevant files
-2. **Watch token count**: Use `--stats` to see estimated tokens
-3. **Truncate wisely**: Adjust `--max-lines` for large files
-4. **Use tree view**: `--tree` helps LLMs understand project structure
-5. **Iterate**: Use `--dry-run` to preview before generating
-
-## Building
+### Basic Usage
 
 ```bash
-# Development build
-cargo build
+# Current directory to stdout
+pctx
 
-# Release build with all features
-cargo build --release --all-features
+# Specific paths
+pctx src/ tests/ README.md
 
-# Without optional features
-cargo build --release --no-default-features
+# Copy to clipboard for pasting into ChatGPT
+pctx --clipboard
+
+# Save to file
+pctx --output context.md
+pctx -o context.md --force  # Overwrite existing
 ```
 
-### Features
+### Filtering
 
-- `clipboard` (default) - System clipboard support
-- `tokens` (default) - Accurate token counting with tiktoken
+```bash
+# Only Rust files
+pctx --include "*.rs"
+
+# Exclude tests
+pctx --exclude "*_test.go" --exclude "**/__tests__/**"
+
+# Include hidden files
+pctx --hidden
+
+# Disable default excludes (include node_modules, etc.)
+pctx --no-default-excludes
+```
+
+### Output Formats
+
+```bash
+# Markdown (default) - good for most LLMs
+pctx --format markdown
+
+# XML - useful for Claude
+pctx --format xml
+
+# Plain text - minimal formatting
+pctx --format plain
+```
+
+### Working with Large Codebases
+
+```bash
+# Limit recursion depth
+pctx --max-depth 2
+
+# Disable truncation for full content
+pctx --no-truncation
+
+# Custom truncation settings
+pctx --max-lines 1000 --head-lines 50 --tail-lines 25
+
+# Smaller file size limit
+pctx --max-size 100  # 100KB max
+
+# Preview what would be included
+pctx --dry-run
+pctx --dry-run --json  # With file details
+```
+
+### CI/CD Integration
+
+```bash
+# Check if context generation would succeed
+pctx --dry-run --json > /dev/null && echo "OK" || echo "Failed"
+
+# Generate context and check size
+pctx --json | jq -e '.stats.token_estimate < 100000'
+
+# List large files
+pctx files list --json | jq '.data[] | select(.size_bytes > 50000)'
+
+# Process only changed files in a PR
+git diff --name-only origin/main | pctx --stdin --json
+```
+
+### Integration with Other Tools
+
+```bash
+# Process files found by fd/find
+fd -e py -e js | pctx --stdin
+
+# Process files from ripgrep matches
+rg -l "TODO" | pctx --stdin
+
+# Process git-tracked files only
+git ls-files | pctx --stdin
+
+# Combine with file filtering
+pctx files list -q | grep -E '\.(rs|toml)$' | pctx --stdin
+```
+
+## Shell Completions
+
+Generate completions for your shell:
+
+```bash
+# Bash
+pctx completions bash > ~/.local/share/bash-completion/completions/pctx
+
+# Zsh
+pctx completions zsh > ~/.zfunc/_pctx
+
+# Fish
+pctx completions fish > ~/.config/fish/completions/pctx.fish
+
+# PowerShell
+pctx completions powershell > $PROFILE.CurrentUserAllHosts
+```
+
+## Troubleshooting
+
+### "No files matched the specified filters"
+
+- Check that your paths exist: `ls <path>`
+- Try `--no-default-excludes` to include commonly excluded directories
+- Use `pctx files list` to see what files would be included
+- Check your `.pctx.toml` for overly restrictive patterns
+
+### Clipboard not working on Linux
+
+Clipboard access requires a display server. Make sure:
+- You're running in a graphical environment (X11 or Wayland)
+- `xclip` or `wl-clipboard` is installed
+
+### Config file not being applied
+
+If your `.pctx.toml` has syntax errors, pctx will warn and continue without it:
+```
+Warning: failed to load config file: TOML parse error...
+```
+
+Check your config syntax with:
+```bash
+pctx config show
+```
+
+### Files being truncated unexpectedly
+
+Use `--no-truncation` to disable truncation, or adjust thresholds:
+```bash
+pctx --max-lines 1000 --max-line-length 1000
+```
+
+### Binary files being included
+
+Binary files should be automatically detected and skipped. If a binary file is being included:
+- Check if it has a text-like extension
+- Use `--exclude` to explicitly exclude it
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
+```bash
+# Run tests
+cargo test
+
+# Run with verbose output
+cargo run -- --verbose .
+
+# Run integration tests
+cargo test --test integration_test
+```
