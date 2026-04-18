@@ -12,6 +12,8 @@ use crate::config::Config;
 use crate::error::PctxError;
 use crate::filter::binary;
 
+use dunce;
+
 /// Represents a processed file with its content and metadata
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -46,16 +48,6 @@ impl FileEntry {
     }
 }
 
-/// Strip Windows extended path prefix (\\?\) if present
-fn normalize_path(path: &Path) -> PathBuf {
-    let path_str = path.to_string_lossy();
-    if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
-        PathBuf::from(stripped)
-    } else {
-        path.to_path_buf()
-    }
-}
-
 /// Processor for reading and transforming file content
 pub struct ContentProcessor<'a> {
     config: &'a Config,
@@ -65,22 +57,16 @@ pub struct ContentProcessor<'a> {
 impl<'a> ContentProcessor<'a> {
     /// Create a new content processor
     pub fn new(config: &'a Config) -> Self {
-        // Canonicalize the base path to resolve symlinks, then normalize
         let base_path = std::env::current_dir()
             .ok()
-            .and_then(|p| p.canonicalize().ok())
-            .map(|p| normalize_path(&p))
+            .and_then(|p| dunce::canonicalize(&p).ok())
             .unwrap_or_else(|| PathBuf::from("."));
         Self { config, base_path }
     }
 
     /// Create a new content processor with a specific base path
     pub fn with_base_path(config: &'a Config, base_path: PathBuf) -> Self {
-        // Canonicalize to resolve symlinks, then normalize
-        let base_path = base_path
-            .canonicalize()
-            .map(|p| normalize_path(&p))
-            .unwrap_or(base_path);
+        let base_path = dunce::canonicalize(&base_path).unwrap_or(base_path);
         Self { config, base_path }
     }
 
@@ -102,10 +88,8 @@ impl<'a> ContentProcessor<'a> {
 
         let line_count = content.lines().count();
 
-        // Normalize path to handle Windows \\?\ prefix
-        let clean_path = normalize_path(path);
+        let clean_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
-        // Compute relative path (base_path is already normalized in constructor)
         let relative_path = clean_path
             .strip_prefix(&self.base_path)
             .map(|p| p.to_path_buf())
@@ -163,26 +147,6 @@ mod tests {
             verbose: false,
             quiet: false,
         }
-    }
-
-    #[test]
-    fn test_normalize_path_regular() {
-        let path = PathBuf::from("/some/regular/path");
-        assert_eq!(normalize_path(&path), path);
-    }
-
-    #[test]
-    fn test_normalize_path_windows_prefix() {
-        let path = PathBuf::from(r"\\?\C:\Users\Test\file.txt");
-        let normalized = normalize_path(&path);
-        assert_eq!(normalized, PathBuf::from(r"C:\Users\Test\file.txt"));
-    }
-
-    #[test]
-    fn test_normalize_path_no_prefix() {
-        let path = PathBuf::from(r"C:\Users\Test\file.txt");
-        let normalized = normalize_path(&path);
-        assert_eq!(normalized, path);
     }
 
     #[test]
@@ -378,15 +342,6 @@ mod tests {
 
         // Relative path should be just the filename
         assert_eq!(entry.relative_path, "test.txt");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_normalize_path_windows_unc() {
-        // Test UNC path without \\?\ prefix
-        let path = PathBuf::from(r"\\server\share\file.txt");
-        let normalized = normalize_path(&path);
-        assert_eq!(normalized, path);
     }
 
     #[test]

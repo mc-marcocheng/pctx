@@ -7,12 +7,25 @@ use crate::config::Config;
 use crate::error::PctxError;
 use crate::filter::binary;
 
-/// Check if a path is the root of a git repository
-///
-/// Only returns true if the path itself contains a .git directory,
-/// not if it's merely inside a git repository.
-pub fn is_git_repo(path: &Path) -> bool {
-    path.join(".git").exists()
+/// Check if a path is inside a git repository by walking up the directory tree.
+pub fn is_inside_git_repo(path: &Path) -> bool {
+    let mut current = if path.is_file() {
+        match path.parent() {
+            Some(p) => p.to_path_buf(),
+            None => return false,
+        }
+    } else {
+        path.to_path_buf()
+    };
+
+    loop {
+        if current.join(".git").exists() {
+            return true;
+        }
+        if !current.pop() {
+            return false;
+        }
+    }
 }
 
 /// Scan a git repository using git ls-files

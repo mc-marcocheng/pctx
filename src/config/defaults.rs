@@ -69,7 +69,6 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
     "*.sublime-workspace",
     "*.sublime-project",
     // Environment and secrets
-    ".env",
     ".env.*",
     "*.local",
     ".secrets",

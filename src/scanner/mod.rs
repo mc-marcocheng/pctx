@@ -13,44 +13,53 @@ use crate::filter::patterns::PatternMatcher;
 pub struct Scanner<'a> {
     config: &'a Config,
     user_pattern_matcher: PatternMatcher,
+    base_paths: Vec<PathBuf>,
 }
 
 impl<'a> Scanner<'a> {
     /// Create a new scanner with the given configuration
     pub fn new(config: &'a Config) -> Self {
-        // Pattern matcher for all exclude/include filtering
-        // (gitignore and hidden files are handled by the walker/git scanner,
-        // but default excludes and user patterns are handled here)
         let user_pattern_matcher =
             PatternMatcher::new(&config.exclude_patterns, &config.include_patterns);
+
+        let base_paths: Vec<PathBuf> = config
+            .paths
+            .iter()
+            .filter_map(|p| dunce::canonicalize(p).ok())
+            .collect();
 
         Self {
             config,
             user_pattern_matcher,
+            base_paths,
         }
     }
 
     /// Scan configured paths and return list of files to process
     pub fn scan(&self) -> Result<Vec<PathBuf>, PctxError> {
         let mut all_files = Vec::new();
+        let mut first_error: Option<PctxError> = None;
 
         for path in &self.config.paths {
             if !path.exists() {
-                // Path doesn't exist - determine if it looks like a file or directory
-                // for a more helpful error message
-                return Err(PctxError::FileNotFound(path.clone()));
+                let err = PctxError::FileNotFound(path.clone());
+                if self.config.verbose {
+                    eprintln!("Warning: {}", err);
+                }
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                continue;
             }
 
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
 
             if canonical.is_file() {
-                // Direct file path
                 if self.should_include(&canonical) {
                     all_files.push(canonical);
                 }
             } else if canonical.is_dir() {
-                // Directory - check if it's a git repo
-                let files = if self.config.use_gitignore && git::is_git_repo(&canonical) {
+                let files = if self.config.use_gitignore && git::is_inside_git_repo(&canonical) {
                     git::scan_git_repo(&canonical, self.config)?
                 } else {
                     walker::scan_directory(&canonical, self.config)?
@@ -67,6 +76,12 @@ impl<'a> Scanner<'a> {
         // Sort for consistent output
         all_files.sort();
         all_files.dedup();
+
+        if all_files.is_empty() {
+            if let Some(err) = first_error {
+                return Err(err);
+            }
+        }
 
         Ok(all_files)
     }
@@ -85,7 +100,7 @@ impl<'a> Scanner<'a> {
                 continue;
             }
 
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let canonical = dunce::canonicalize(&path).unwrap_or_else(|_| path.clone());
 
             if canonical.is_file() {
                 if self.should_include(&canonical) {
@@ -93,7 +108,7 @@ impl<'a> Scanner<'a> {
                 }
             } else if canonical.is_dir() {
                 // For directories in stdin mode, we expand them
-                let files = if self.config.use_gitignore && git::is_git_repo(&canonical) {
+                let files = if self.config.use_gitignore && git::is_inside_git_repo(&canonical) {
                     git::scan_git_repo(&canonical, self.config)?
                 } else {
                     walker::scan_directory(&canonical, self.config)?
@@ -116,10 +131,16 @@ impl<'a> Scanner<'a> {
 
     /// Check if a file should be included based on patterns and size
     fn should_include(&self, path: &PathBuf) -> bool {
-        // Convert to relative path for pattern matching
-        let relative = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
+        // Convert to relative path for pattern matching, preferring scan base paths
+        let relative = self
+            .base_paths
+            .iter()
+            .find_map(|base| path.strip_prefix(base).ok().map(|p| p.to_path_buf()))
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
+            })
             .unwrap_or_else(|| path.clone());
 
         // Check exclude patterns

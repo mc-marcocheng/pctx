@@ -37,19 +37,6 @@ impl Default for TruncationConfig {
     }
 }
 
-impl From<&TruncationArgs> for TruncationConfig {
-    fn from(args: &TruncationArgs) -> Self {
-        Self {
-            max_lines: args.effective_max_lines(),
-            head_lines: args.head_lines,
-            tail_lines: args.tail_lines,
-            max_line_length: args.effective_max_line_length(),
-            head_chars: args.head_chars,
-            tail_chars: args.tail_chars,
-        }
-    }
-}
-
 /// Complete resolved configuration for a pctx operation
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -82,7 +69,11 @@ impl Config {
         let truncation = Self::build_truncation(&args.truncation, file_config.as_ref());
 
         Ok(Self {
-            paths: args.paths.clone(),
+            paths: if args.paths.is_empty() {
+                vec![PathBuf::from(".")]
+            } else {
+                args.paths.clone()
+            },
             exclude_patterns,
             include_patterns,
             include_hidden: args.filter.hidden,
@@ -184,7 +175,7 @@ impl Config {
     }
 
     /// Build truncation config from args and file config
-    /// CLI args take precedence over file config
+    /// CLI args (Some) take precedence over file config, which takes precedence over defaults
     fn build_truncation(
         args: &TruncationArgs,
         file_config: Option<&file::FileConfig>,
@@ -200,43 +191,33 @@ impl Config {
             };
         }
 
-        // CLI args override file config, file config overrides defaults
-        // We detect "explicit" CLI args by checking if they differ from defaults
-        // (This is a limitation - ideally clap would tell us if a flag was set)
         let fc = file_config;
 
         TruncationConfig {
-            max_lines: if args.max_lines != defaults.max_lines {
-                args.max_lines
-            } else {
-                fc.and_then(|f| f.max_lines).unwrap_or(args.max_lines)
-            },
-            head_lines: if args.head_lines != defaults.head_lines {
-                args.head_lines
-            } else {
-                fc.and_then(|f| f.head_lines).unwrap_or(args.head_lines)
-            },
-            tail_lines: if args.tail_lines != defaults.tail_lines {
-                args.tail_lines
-            } else {
-                fc.and_then(|f| f.tail_lines).unwrap_or(args.tail_lines)
-            },
-            max_line_length: if args.max_line_length != defaults.max_line_length {
-                args.max_line_length
-            } else {
-                fc.and_then(|f| f.max_line_length)
-                    .unwrap_or(args.max_line_length)
-            },
-            head_chars: if args.head_chars != defaults.head_chars {
-                args.head_chars
-            } else {
-                fc.and_then(|f| f.head_chars).unwrap_or(args.head_chars)
-            },
-            tail_chars: if args.tail_chars != defaults.tail_chars {
-                args.tail_chars
-            } else {
-                fc.and_then(|f| f.tail_chars).unwrap_or(args.tail_chars)
-            },
+            max_lines: args
+                .max_lines
+                .or(fc.and_then(|f| f.max_lines))
+                .unwrap_or(defaults.max_lines),
+            head_lines: args
+                .head_lines
+                .or(fc.and_then(|f| f.head_lines))
+                .unwrap_or(defaults.head_lines),
+            tail_lines: args
+                .tail_lines
+                .or(fc.and_then(|f| f.tail_lines))
+                .unwrap_or(defaults.tail_lines),
+            max_line_length: args
+                .max_line_length
+                .or(fc.and_then(|f| f.max_line_length))
+                .unwrap_or(defaults.max_line_length),
+            head_chars: args
+                .head_chars
+                .or(fc.and_then(|f| f.head_chars))
+                .unwrap_or(defaults.head_chars),
+            tail_chars: args
+                .tail_chars
+                .or(fc.and_then(|f| f.tail_chars))
+                .unwrap_or(defaults.tail_chars),
         }
     }
 }

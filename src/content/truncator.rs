@@ -17,30 +17,35 @@ pub fn truncate_content(content: &str, config: &TruncationConfig) -> (String, bo
 
     // Check if we need line truncation
     let processed_lines: Vec<String> = if config.max_lines > 0 && total_lines > config.max_lines {
-        truncated = true;
         let head_count = config.head_lines.min(total_lines);
         let tail_count = config
             .tail_lines
             .min(total_lines.saturating_sub(head_count));
-        let tail_start = total_lines.saturating_sub(tail_count);
 
-        truncated_lines = total_lines.saturating_sub(head_count + tail_count);
+        if head_count + tail_count >= total_lines {
+            // head + tail covers all lines; no actual truncation needed
+            lines.iter().map(|s| s.to_string()).collect()
+        } else {
+            truncated = true;
+            let tail_start = total_lines.saturating_sub(tail_count);
+            truncated_lines = total_lines.saturating_sub(head_count + tail_count);
 
-        let head = &lines[..head_count];
-        let tail = &lines[tail_start..];
+            let head = &lines[..head_count];
+            let tail = &lines[tail_start..];
 
-        let mut result: Vec<String> = head.iter().map(|s| s.to_string()).collect();
+            let mut result: Vec<String> = head.iter().map(|s| s.to_string()).collect();
 
-        if truncated_lines > 0 {
-            // Single line marker without extra newlines (join handles spacing)
-            result.push(format!(
-                "... [{} {}] ...",
-                truncated_lines, LINES_OMITTED_MARKER
-            ));
+            if truncated_lines > 0 {
+                // Single line marker without extra newlines (join handles spacing)
+                result.push(format!(
+                    "... [{} {}] ...",
+                    truncated_lines, LINES_OMITTED_MARKER
+                ));
+            }
+
+            result.extend(tail.iter().map(|s| s.to_string()));
+            result
         }
-
-        result.extend(tail.iter().map(|s| s.to_string()));
-        result
     } else {
         lines.iter().map(|s| s.to_string()).collect()
     };

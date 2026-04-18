@@ -196,8 +196,8 @@ pub struct GlobalArgs {
 /// Arguments for the main generate command (default when no subcommand)
 #[derive(Args, Debug, Clone)]
 pub struct GenerateArgs {
-    /// Paths to include (files or directories)
-    #[arg(default_value = ".")]
+    /// Paths to include (files or directories) [default: .]
+    #[arg()]
     pub paths: Vec<PathBuf>,
 
     #[command(flatten)]
@@ -293,56 +293,29 @@ pub struct TruncationArgs {
     #[arg(long, conflicts_with_all = ["max_lines", "max_line_length"])]
     pub no_truncation: bool,
 
-    /// Maximum lines per file before truncation (0 = no limit)
-    #[arg(long, default_value = "500", value_name = "N")]
-    pub max_lines: usize,
+    /// Maximum lines per file before truncation (0 = no limit) [default: 500]
+    #[arg(long, value_name = "N")]
+    pub max_lines: Option<usize>,
 
-    /// Number of lines to keep at the start when truncating
-    #[arg(long, default_value = "20", value_name = "N")]
-    pub head_lines: usize,
+    /// Number of lines to keep at the start when truncating [default: 20]
+    #[arg(long, value_name = "N")]
+    pub head_lines: Option<usize>,
 
-    /// Number of lines to keep at the end when truncating
-    #[arg(long, default_value = "10", value_name = "N")]
-    pub tail_lines: usize,
+    /// Number of lines to keep at the end when truncating [default: 10]
+    #[arg(long, value_name = "N")]
+    pub tail_lines: Option<usize>,
 
-    /// Maximum characters per line before truncation (0 = no limit)
-    #[arg(long, default_value = "500", value_name = "N")]
-    pub max_line_length: usize,
+    /// Maximum characters per line before truncation (0 = no limit) [default: 500]
+    #[arg(long, value_name = "N")]
+    pub max_line_length: Option<usize>,
 
-    /// Characters to keep at line start when truncating
-    #[arg(long, default_value = "200", value_name = "N")]
-    pub head_chars: usize,
+    /// Characters to keep at line start when truncating [default: 200]
+    #[arg(long, value_name = "N")]
+    pub head_chars: Option<usize>,
 
-    /// Characters to keep at line end when truncating
-    #[arg(long, default_value = "100", value_name = "N")]
-    pub tail_chars: usize,
-}
-
-impl TruncationArgs {
-    /// Check if max_lines was explicitly set (not default)
-    pub fn max_lines_explicit(&self) -> bool {
-        // This is a workaround - ideally we'd use Option<usize>
-        // For now, we check if no_truncation is set
-        !self.no_truncation
-    }
-
-    /// Get effective max_lines value
-    pub fn effective_max_lines(&self) -> usize {
-        if self.no_truncation {
-            0
-        } else {
-            self.max_lines
-        }
-    }
-
-    /// Get effective max_line_length value
-    pub fn effective_max_line_length(&self) -> usize {
-        if self.no_truncation {
-            0
-        } else {
-            self.max_line_length
-        }
-    }
+    /// Characters to keep at line end when truncating [default: 100]
+    #[arg(long, value_name = "N")]
+    pub tail_chars: Option<usize>,
 }
 
 /// Supported content output formats
@@ -355,6 +328,17 @@ pub enum ContentFormat {
     Xml,
     /// Plain text with simple separators
     Plain,
+}
+
+impl ContentFormat {
+    /// Return the format name as a lowercase string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContentFormat::Markdown => "markdown",
+            ContentFormat::Xml => "xml",
+            ContentFormat::Plain => "plain",
+        }
+    }
 }
 
 /// Supported shells for completion generation

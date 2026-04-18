@@ -1,5 +1,6 @@
 //! JSON output types for structured responses.
 
+use dunce;
 use serde::Serialize;
 use std::path::Path;
 
@@ -104,10 +105,11 @@ impl FileInfo {
             .unwrap_or("")
             .to_string();
 
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         let relative_path = std::env::current_dir()
             .ok()
-            .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| path.to_path_buf());
+            .and_then(|cwd| canonical.strip_prefix(&cwd).ok().map(|p| p.to_path_buf()))
+            .unwrap_or(canonical);
 
         Ok(Self {
             path: relative_path.to_string_lossy().to_string(),

@@ -46,16 +46,12 @@ pub struct FileConfig {
 
 /// Search for .pctx.toml in current directory and parents
 pub fn find_config_file() -> Option<PathBuf> {
-    let config_names = [".pctx.toml", "pctx.toml"];
-
     let mut current = std::env::current_dir().ok()?;
 
     loop {
-        for name in &config_names {
-            let config_path = current.join(name);
-            if config_path.exists() && config_path.is_file() {
-                return Some(config_path);
-            }
+        let config_path = current.join(".pctx.toml");
+        if config_path.exists() && config_path.is_file() {
+            return Some(config_path);
         }
 
         if !current.pop() {

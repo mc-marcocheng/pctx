@@ -73,6 +73,11 @@ fn run_generate_command(
     global: &pctx::cli::GlobalArgs,
 ) -> Result<i32, PctxError> {
     let config = Config::from_args(args, global)?;
+
+    if args.stdin && !args.paths.is_empty() && !global.quiet {
+        eprintln!("Warning: positional paths are ignored when --stdin is used");
+    }
+
     let start_time = std::time::Instant::now();
 
     // Scan for files (either from paths or stdin)
@@ -119,13 +124,8 @@ fn run_generate_command(
 
     // Dry run - just show what would happen
     if args.dry_run {
-        // Estimate tokens for dry run display
-        let sample_content = entries
-            .iter()
-            .map(|e| e.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        stats.estimate_tokens(&sample_content, &args.token_model);
+        let formatted = formatter::format_output(&entries, &config)?;
+        stats.estimate_tokens(&formatted, &args.token_model);
         return handle_dry_run(
             &entries,
             &file_errors,
@@ -155,7 +155,7 @@ fn run_generate_command(
             JsonResponse::Success(SuccessResponse {
                 data: ResponseData::Context(ContextOutput {
                     content: formatted.clone(),
-                    format: format!("{:?}", args.output.format).to_lowercase(),
+                    format: args.output.format.as_str().to_string(),
                     files: file_infos,
                 }),
                 stats: (&stats).into(),
@@ -164,7 +164,7 @@ fn run_generate_command(
             JsonResponse::Partial(PartialResponse {
                 data: ResponseData::Context(ContextOutput {
                     content: formatted.clone(),
-                    format: format!("{:?}", args.output.format).to_lowercase(),
+                    format: args.output.format.as_str().to_string(),
                     files: file_infos,
                 }),
                 stats: (&stats).into(),

@@ -79,9 +79,9 @@ fn tree_to_string_inner(node: &TreeNode, prefix: &str, is_root: bool, output: &m
     }
 }
 
-/// Print tree to stderr
+/// Print tree to stdout
 pub fn print_tree(node: &TreeNode) {
-    eprint!("{}", tree_to_string(node));
+    print!("{}", tree_to_string(node));
 }
 
 #[cfg(test)]

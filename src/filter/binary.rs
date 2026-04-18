@@ -32,7 +32,6 @@ const BINARY_SIGNATURES: &[&[u8]] = &[
     // Media
     &[0x49, 0x44, 0x33],       // MP3 (ID3)
     &[0xFF, 0xFB],             // MP3 (no ID3)
-    &[0x00, 0x00, 0x00],       // MP4/MOV (often starts with ftyp at offset 4)
     &[0x4F, 0x67, 0x67, 0x53], // OGG
     // Fonts
     &[0x00, 0x01, 0x00, 0x00], // TrueType font

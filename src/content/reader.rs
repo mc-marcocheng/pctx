@@ -19,12 +19,12 @@ pub fn read_file_contents(path: &Path, _encoding: Option<&str>) -> Result<String
     })?;
 
     // Try UTF-8 first (most common case)
-    match String::from_utf8(bytes.clone()) {
+    match String::from_utf8(bytes) {
         Ok(content) => Ok(content),
-        Err(_) => {
+        Err(e) => {
             // Fall back to lossy UTF-8 conversion
             // This handles files with mixed encodings or invalid UTF-8 sequences
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
+            Ok(String::from_utf8_lossy(e.as_bytes()).into_owned())
         }
     }
 }
