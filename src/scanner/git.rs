@@ -79,7 +79,7 @@ pub fn scan_git_repo(dir: &Path, config: &Config) -> Result<Vec<PathBuf>, PctxEr
             }
         }
 
-        if path.is_file() {
+        if path.symlink_metadata().is_ok_and(|m| m.is_file()) {
             // Skip binary files early
             if binary::is_binary(&path) {
                 continue;

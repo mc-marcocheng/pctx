@@ -78,7 +78,7 @@ impl<'a> ContentProcessor<'a> {
         }
 
         // Read content
-        let raw_content = read_file_contents(path, None)?;
+        let raw_content = read_file_contents(path, self.config.max_file_size, None)?;
         let original_bytes = raw_content.len();
         let original_lines = raw_content.lines().count();
 

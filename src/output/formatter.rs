@@ -75,8 +75,9 @@ fn format_xml(entries: &[FileEntry], config: &Config) -> Result<String, PctxErro
             .map(|e| PathBuf::from(&e.relative_path))
             .collect();
         let tree_struct = tree::build_tree(&paths);
+        let tree_str = tree::tree_to_string(&tree_struct);
         output.push_str("  <tree><![CDATA[\n");
-        output.push_str(&tree::tree_to_string(&tree_struct));
+        output.push_str(&escape_cdata_content(&tree_str));
         output.push_str("]]></tree>\n");
     }
 

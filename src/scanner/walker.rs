@@ -25,7 +25,7 @@ pub fn scan_directory(dir: &Path, config: &Config) -> Result<Vec<PathBuf>, PctxE
 
     for entry in walker.flatten() {
         let path = entry.path();
-        if path.is_file() {
+        if entry.file_type().is_some_and(|ft| ft.is_file()) {
             // Skip binary files early
             if binary::is_binary(path) {
                 continue;
