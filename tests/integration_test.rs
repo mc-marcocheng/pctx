@@ -10,18 +10,6 @@ fn pctx() -> Command {
     Command::cargo_bin("pctx").unwrap()
 }
 
-/// Normalize path separators for cross-platform testing
-#[allow(dead_code)]
-fn normalize_path(path: &str) -> String {
-    path.replace(['/', '\\'], MAIN_SEPARATOR_STR)
-}
-
-/// Create a predicate that matches a path regardless of separator
-#[allow(dead_code)]
-fn contains_path(path: &str) -> predicates::str::ContainsPredicate {
-    predicate::str::contains(normalize_path(path))
-}
-
 /// Setup a basic test project WITHOUT binary files
 fn setup_test_project() -> TempDir {
     let dir = TempDir::new().unwrap();
