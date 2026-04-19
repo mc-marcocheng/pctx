@@ -24,6 +24,34 @@ struct CompiledPattern {
     is_dir_pattern: bool,
 }
 
+/// Normalize path separators to forward slashes for consistent matching
+fn normalize_separators(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
+/// Check if any accumulated prefix of the path matches the pattern.
+///
+/// For a path like `a/b/c/file.txt`, this tests:
+///   `a`, `a/b`, `a/b/c`
+/// (i.e. every proper prefix, not the full path itself).
+///
+/// This implements gitignore directory semantics: matching a directory name
+/// means everything inside it is also matched.
+fn matches_any_prefix(path: &Path, pattern: &Pattern) -> bool {
+    let normalized = normalize_separators(&path.to_string_lossy());
+    let parts: Vec<&str> = normalized.split('/').collect();
+
+    // Check all prefixes except the full path (caller already checks that)
+    for i in 1..parts.len() {
+        let prefix = parts[..i].join("/");
+        if pattern.matches(&prefix) {
+            return true;
+        }
+    }
+
+    false
+}
+
 impl PatternMatcher {
     /// Create a new pattern matcher
     pub fn new(exclude_patterns: &[String], include_patterns: &[String]) -> Self {
@@ -42,16 +70,20 @@ impl PatternMatcher {
 
     /// Check if a path should be excluded
     pub fn is_excluded(&self, path: &Path) -> bool {
-        let path_str = path.to_string_lossy();
+        let path_str = normalize_separators(&path.to_string_lossy());
 
         for pattern in &self.excludes {
-            // For anchored patterns, only match from root
             if pattern.anchored {
                 if pattern.pattern.matches(&path_str) {
                     return true;
                 }
+                // Check path prefixes for directory matching
+                if matches_any_prefix(path, &pattern.pattern) {
+                    return true;
+                }
             } else {
-                // Check each component of the path
+                // Check each individual component of the path (handles simple
+                // patterns like "node_modules" matching any component anywhere)
                 for component in path.components() {
                     let component_str = component.as_os_str().to_string_lossy();
                     if pattern.pattern.matches(&component_str) {
@@ -59,29 +91,23 @@ impl PatternMatcher {
                     }
                 }
 
-                // Check full path
+                // Check full normalized path
                 if pattern.pattern.matches(&path_str) {
                     return true;
                 }
 
                 // Also check just the filename
                 if let Some(filename) = path.file_name() {
-                    if pattern.pattern.matches(&filename.to_string_lossy()) {
+                    let filename_str = normalize_separators(&filename.to_string_lossy());
+                    if pattern.pattern.matches(&filename_str) {
                         return true;
                     }
                 }
 
-                // Directory prefix matching: if a parent directory matches, exclude
-                // This handles patterns like "node_modules" matching "node_modules/pkg/index.js"
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        for parent_component in parent.components() {
-                            let parent_str = parent_component.as_os_str().to_string_lossy();
-                            if pattern.pattern.matches(&parent_str) {
-                                return true;
-                            }
-                        }
-                    }
+                // Check accumulated path prefixes for directory matching
+                // (handles multi-component patterns like "models/huggingface_cache")
+                if matches_any_prefix(path, &pattern.pattern) {
+                    return true;
                 }
             }
         }
@@ -99,11 +125,14 @@ impl PatternMatcher {
             return true;
         }
 
-        let path_str = path.to_string_lossy();
+        let path_str = normalize_separators(&path.to_string_lossy());
 
         for pattern in &self.includes {
             if pattern.anchored {
                 if pattern.pattern.matches(&path_str) {
+                    return true;
+                }
+                if matches_any_prefix(path, &pattern.pattern) {
                     return true;
                 }
             } else {
@@ -112,21 +141,23 @@ impl PatternMatcher {
                 }
                 // Also check just the filename
                 if let Some(filename) = path.file_name() {
-                    if pattern.pattern.matches(&filename.to_string_lossy()) {
+                    let filename_str = normalize_separators(&filename.to_string_lossy());
+                    if pattern.pattern.matches(&filename_str) {
                         return true;
                     }
                 }
 
-                // Directory prefix matching for includes
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        for parent_component in parent.components() {
-                            let parent_str = parent_component.as_os_str().to_string_lossy();
-                            if pattern.pattern.matches(&parent_str) {
-                                return true;
-                            }
-                        }
+                // Check each individual component (handles simple patterns)
+                for component in path.components() {
+                    let component_str = component.as_os_str().to_string_lossy();
+                    if pattern.pattern.matches(&component_str) {
+                        return true;
                     }
+                }
+
+                // Check accumulated path prefixes for directory matching
+                if matches_any_prefix(path, &pattern.pattern) {
+                    return true;
                 }
             }
         }
@@ -161,12 +192,15 @@ fn compile_pattern(pattern: &str) -> Option<CompiledPattern> {
         (false, clean)
     };
 
+    // Normalize separators in the pattern itself
+    let pattern_body = normalize_separators(pattern_body);
+
     // Convert gitignore patterns to glob patterns
     let glob_pattern = if anchored {
         // Anchored patterns match from root only
         // Per gitignore spec: / at start anchors to directory where .gitignore is
         pattern_body.to_string()
-    } else if clean.contains('/') && !clean.starts_with("**") {
+    } else if pattern_body.contains('/') && !pattern_body.starts_with("**") {
         // Pattern with path separator but not anchored - match anywhere in tree
         // Per gitignore spec: patterns without leading / match at any level
         format!("**/{}", pattern_body)
@@ -250,5 +284,56 @@ mod tests {
         assert!(matcher.is_excluded(&PathBuf::from("src/app.test.ts")));
         assert!(matcher.is_excluded(&PathBuf::from("app.test.ts")));
         assert!(!matcher.is_excluded(&PathBuf::from("app.ts")));
+    }
+
+    #[test]
+    fn test_multi_component_directory_exclude() {
+        // Excluding a path like "src/config" should exclude everything inside it.
+        let matcher = PatternMatcher::new(&["src/config".to_string()], &[]);
+
+        // The directory itself
+        assert!(matcher.is_excluded(&PathBuf::from("src/config")));
+
+        // Files inside the directory
+        assert!(matcher.is_excluded(&PathBuf::from("src/config/mod.rs")));
+        assert!(matcher.is_excluded(&PathBuf::from("src/config/defaults.rs")));
+        assert!(matcher.is_excluded(&PathBuf::from("src/config/file.rs")));
+
+        // Files NOT inside the directory should not be excluded
+        assert!(!matcher.is_excluded(&PathBuf::from("src/main.rs")));
+        assert!(!matcher.is_excluded(&PathBuf::from("src/content/mod.rs")));
+        assert!(!matcher.is_excluded(&PathBuf::from("README.md")));
+    }
+
+    #[test]
+    fn test_multi_component_directory_exclude_with_trailing_slash() {
+        let matcher = PatternMatcher::new(&["src/output/".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("src/output/formatter.rs")));
+        assert!(matcher.is_excluded(&PathBuf::from("src/output/json_types.rs")));
+        assert!(!matcher.is_excluded(&PathBuf::from("src/scanner/mod.rs")));
+    }
+
+    #[test]
+    fn test_multi_component_anchored_directory_exclude() {
+        let matcher = PatternMatcher::new(&["/src/filter".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("src/filter/binary.rs")));
+        assert!(matcher.is_excluded(&PathBuf::from("src/filter/patterns.rs")));
+        // Anchored: should not match if nested under another prefix
+        assert!(!matcher.is_excluded(&PathBuf::from("other/src/filter/binary.rs")));
+    }
+
+    #[test]
+    fn test_multi_component_include() {
+        let matcher = PatternMatcher::new(&[], &["src/output".to_string()]);
+        assert!(matcher.is_included(&PathBuf::from("src/output/formatter.rs")));
+        assert!(matcher.is_included(&PathBuf::from("src/output/tree.rs")));
+        assert!(!matcher.is_included(&PathBuf::from("tests/integration_test.rs")));
+    }
+
+    #[test]
+    fn test_backslash_separator_excluded() {
+        // Simulate Windows-style paths
+        let matcher = PatternMatcher::new(&["src/config".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("src\\config\\defaults.rs")));
     }
 }
