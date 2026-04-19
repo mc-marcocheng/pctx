@@ -32,6 +32,7 @@ pub fn is_inside_git_repo(path: &Path) -> bool {
 pub fn scan_git_repo(dir: &Path, config: &Config) -> Result<Vec<PathBuf>, PctxError> {
     let output = Command::new("git")
         .arg("ls-files")
+        .arg("-z")
         .arg("--cached")
         .arg("--others")
         .arg("--exclude-standard")
@@ -46,15 +47,16 @@ pub fn scan_git_repo(dir: &Path, config: &Config) -> Result<Vec<PathBuf>, PctxEr
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut files = Vec::new();
 
-    for line in stdout.lines() {
-        if line.is_empty() {
+    // Split raw bytes by null terminator (safe regardless of spaces/special characters)
+    for item in output.stdout.split(|&b| b == 0) {
+        if item.is_empty() {
             continue;
         }
 
-        let path = dir.join(line);
+        let path_str = String::from_utf8_lossy(item);
+        let path = dir.join(path_str.as_ref());
 
         // Apply hidden filter
         if !config.include_hidden {
