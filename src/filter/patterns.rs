@@ -162,8 +162,26 @@ fn compile_pattern(pattern: &str) -> Option<CompiledPattern> {
         return None;
     }
 
-    let is_dir_pattern = trimmed.ends_with('/');
-    let clean = trimmed.trim_end_matches('/');
+    // Normalize backslashes to forward slashes
+    let normalized = normalize_separators(trimmed);
+
+    // Detect path-like input (leading "./") and strip it with a warning.
+    // This commonly occurs when users tab-complete a path on the command line
+    // and pass it to --include/--exclude, which expect gitignore-style patterns.
+    let cleaned = if let Some(stripped) = normalized.strip_prefix("./") {
+        eprintln!(
+            "Warning: '{}' looks like a file path, not a pattern. \
+             Stripping leading \"./\". Consider using a positional argument instead: \
+             pctx {}",
+            trimmed, stripped
+        );
+        stripped
+    } else {
+        normalized.as_str()
+    };
+
+    let is_dir_pattern = cleaned.ends_with('/');
+    let clean = cleaned.trim_end_matches('/');
 
     // Handle root-anchored patterns (starting with /)
     let (anchored, pattern_body) = if let Some(stripped) = clean.strip_prefix('/') {
@@ -172,8 +190,9 @@ fn compile_pattern(pattern: &str) -> Option<CompiledPattern> {
         (false, clean)
     };
 
-    // Normalize separators in the pattern itself
-    let pattern_body = normalize_separators(pattern_body);
+    if pattern_body.is_empty() {
+        return None;
+    }
 
     // Convert gitignore patterns to glob patterns
     let glob_pattern = if anchored {
@@ -333,5 +352,89 @@ mod tests {
         let matcher2 = PatternMatcher::new(&["output".to_string()], &[]);
         assert!(matcher2.is_excluded(&PathBuf::from("output/file.txt")));
         assert!(matcher2.is_excluded(&PathBuf::from("output")));
+    }
+
+    // --- Tests for backslash normalization ordering fix ---
+
+    #[test]
+    fn test_trailing_backslash_detected_as_dir_pattern() {
+        // On Windows, tab-completion produces trailing backslashes.
+        // After normalization this must be recognized as a directory pattern.
+        let matcher = PatternMatcher::new(&[r"output\".to_string()], &[]);
+
+        // Files inside the directory
+        assert!(matcher.is_excluded(&PathBuf::from("output/file.txt")));
+        assert!(matcher.is_excluded(&PathBuf::from("src/output/file.txt")));
+
+        // Directory-only pattern must NOT match a bare file named "output"
+        assert!(!matcher.is_excluded(&PathBuf::from("output")));
+    }
+
+    #[test]
+    fn test_backslash_multi_component_include() {
+        // Backslash-separated include pattern should work
+        let matcher = PatternMatcher::new(&[], &[r"src\content".to_string()]);
+        assert!(matcher.is_included(&PathBuf::from("src/content/reader.rs")));
+        assert!(matcher.is_included(&PathBuf::from("src/content/truncator.rs")));
+        assert!(!matcher.is_included(&PathBuf::from("src/filter/binary.rs")));
+    }
+
+    #[test]
+    fn test_backslash_multi_component_dir_include() {
+        // The original reported bug: .\path\to\dir\ should work
+        let matcher = PatternMatcher::new(&[], &[r".\src\scanner\".to_string()]);
+        assert!(matcher.is_included(&PathBuf::from("src/scanner/git.rs")));
+        assert!(matcher.is_included(&PathBuf::from("src/scanner/walker.rs")));
+        assert!(!matcher.is_included(&PathBuf::from("src/filter/binary.rs")));
+    }
+
+    // --- Tests for leading "./" handling ---
+
+    #[test]
+    fn test_dot_slash_prefix_stripped_include() {
+        let matcher = PatternMatcher::new(&[], &["./src/config".to_string()]);
+        assert!(matcher.is_included(&PathBuf::from("src/config/mod.rs")));
+        assert!(!matcher.is_included(&PathBuf::from("tests/integration_test.rs")));
+    }
+
+    #[test]
+    fn test_dot_slash_prefix_stripped_exclude() {
+        let matcher = PatternMatcher::new(&["./node_modules".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("node_modules/pkg/index.js")));
+    }
+
+    #[test]
+    fn test_dot_backslash_prefix_stripped() {
+        // .\dir (Windows tab-completion) should work after normalization + stripping
+        let matcher = PatternMatcher::new(&[r".\node_modules".to_string()], &[]);
+        assert!(matcher.is_excluded(&PathBuf::from("node_modules/pkg/index.js")));
+    }
+
+    #[test]
+    fn test_bare_dot_pattern_kept() {
+        // "." alone is a valid glob that matches a literal "." component
+        assert!(compile_pattern(".").is_some());
+    }
+
+    #[test]
+    fn test_dot_slash_alone_ignored() {
+        // "./" is just current dir, not a meaningful pattern
+        assert!(compile_pattern("./").is_none());
+    }
+
+    #[test]
+    fn test_dot_backslash_alone_ignored() {
+        // ".\" normalized to "./" — same as above
+        assert!(compile_pattern(r".\").is_none());
+    }
+
+    #[test]
+    fn test_dot_slash_does_not_strip_from_middle() {
+        // Only leading "./" is stripped. A pattern like "src/./config" is left as-is
+        // (the user likely made a mistake and should see it fail or behave oddly).
+        let compiled = compile_pattern("src/./config");
+        assert!(compiled.is_some());
+        // The glob will be "**/src/./config" which may or may not match depending
+        // on glob crate behavior — but we don't silently rewrite it.
     }
 }
