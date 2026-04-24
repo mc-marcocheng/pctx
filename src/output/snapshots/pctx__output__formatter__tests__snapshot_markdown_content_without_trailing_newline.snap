@@ -1,0 +1,8 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+`a.txt`:
+```text
+no trailing newline
+```

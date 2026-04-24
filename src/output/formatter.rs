@@ -272,4 +272,147 @@ mod tests {
         assert_eq!(extension_to_language("unknown_ext"), "");
         assert_eq!(extension_to_language(""), "");
     }
+
+    // ==================== Snapshot tests for format_output ====================
+    //
+    // These snapshots are stored alongside this file (see src/output/snapshots/).
+    // To regenerate after an intentional format change:
+    //   cargo insta test --review      (interactive)
+    //   INSTA_UPDATE=always cargo test  (accept all)
+
+    use crate::config::TruncationConfig;
+
+    fn entry(rel: &str, ext: &str, content: &str) -> FileEntry {
+        FileEntry {
+            absolute_path: std::path::PathBuf::from("/abs").join(rel),
+            relative_path: rel.to_string(),
+            extension: ext.to_string(),
+            original_bytes: content.len(),
+            original_lines: content.lines().count(),
+            line_count: content.lines().count(),
+            truncated: false,
+            truncated_lines: 0,
+            content: content.to_string(),
+        }
+    }
+
+    fn config_with(format: ContentFormat, tree: bool) -> Config {
+        Config {
+            paths: vec![std::path::PathBuf::from(".")],
+            exclude_patterns: Vec::new(),
+            include_patterns: Vec::new(),
+            include_hidden: false,
+            use_default_excludes: true,
+            use_gitignore: true,
+            max_file_size: 1024 * 1024,
+            max_depth: None,
+            truncation: TruncationConfig::default(),
+            output_format: format,
+            show_tree: tree,
+            show_stats: false,
+            absolute_paths: false,
+            verbose: false,
+            quiet: false,
+        }
+    }
+
+    #[test]
+    fn snapshot_markdown_two_files() {
+        let entries = vec![
+            entry(
+                "src/lib.rs",
+                "rs",
+                "pub fn hello() {\n    println!(\"hi\");\n}\n",
+            ),
+            entry("README.md", "md", "# Title\n\nBody.\n"),
+        ];
+        let cfg = config_with(ContentFormat::Markdown, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_markdown_with_tree() {
+        let entries = vec![
+            entry("src/main.rs", "rs", "fn main() {}\n"),
+            entry("src/lib.rs", "rs", "pub fn a() {}\n"),
+            entry("README.md", "md", "# R\n"),
+        ];
+        let cfg = config_with(ContentFormat::Markdown, true);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_markdown_fence_grows_for_triple_backtick() {
+        let entries = vec![entry("doc.md", "md", "Example:\n```\ncode\n```\nEnd.\n")];
+        let cfg = config_with(ContentFormat::Markdown, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_markdown_fence_grows_for_quadruple_backtick() {
+        let entries = vec![entry("doc.md", "md", "Nested:\n````\ninner\n````\nEnd.\n")];
+        let cfg = config_with(ContentFormat::Markdown, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_markdown_content_without_trailing_newline() {
+        let entries = vec![entry("a.txt", "txt", "no trailing newline")];
+        let cfg = config_with(ContentFormat::Markdown, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_xml_two_files() {
+        let entries = vec![
+            entry("src/lib.rs", "rs", "pub fn hello() {}\n"),
+            entry("data.json", "json", "{\"k\": 1}\n"),
+        ];
+        let cfg = config_with(ContentFormat::Xml, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_xml_escapes_cdata_injection() {
+        let entries = vec![entry("evil.txt", "txt", "before ]]> middle ]]> end\n")];
+        let cfg = config_with(ContentFormat::Xml, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_xml_escapes_path_attribute() {
+        let entries = vec![entry("weird<&\"path>.txt", "txt", "hi\n")];
+        let cfg = config_with(ContentFormat::Xml, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_plain_two_files() {
+        let entries = vec![
+            entry("a.txt", "txt", "alpha\n"),
+            entry("b.txt", "txt", "bravo"),
+        ];
+        let cfg = config_with(ContentFormat::Plain, false);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn snapshot_plain_with_tree() {
+        let entries = vec![
+            entry("src/a.txt", "txt", "alpha\n"),
+            entry("src/b.txt", "txt", "bravo\n"),
+        ];
+        let cfg = config_with(ContentFormat::Plain, true);
+        let output = format_output(&entries, &cfg).unwrap();
+        insta::assert_snapshot!(output);
+    }
 }

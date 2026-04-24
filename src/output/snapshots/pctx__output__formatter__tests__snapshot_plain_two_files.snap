@@ -1,0 +1,9 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+=== a.txt ===
+alpha
+
+=== b.txt ===
+bravo

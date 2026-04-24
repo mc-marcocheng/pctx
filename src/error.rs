@@ -180,3 +180,186 @@ impl PctxError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_path() -> PathBuf {
+        PathBuf::from("/tmp/sample.txt")
+    }
+
+    #[test]
+    fn code_maps_each_variant() {
+        let cases: Vec<(PctxError, &'static str)> = vec![
+            (
+                PctxError::FileNotFound(sample_path()),
+                error_codes::FILE_NOT_FOUND,
+            ),
+            (
+                PctxError::DirectoryNotFound(sample_path()),
+                error_codes::FILE_NOT_FOUND,
+            ),
+            (
+                PctxError::PermissionDenied(sample_path()),
+                error_codes::PERMISSION_DENIED,
+            ),
+            (
+                PctxError::OutputExists(sample_path()),
+                error_codes::OUTPUT_EXISTS,
+            ),
+            (
+                PctxError::BinaryFile(sample_path()),
+                error_codes::BINARY_FILE,
+            ),
+            (
+                PctxError::FileTooLarge {
+                    path: sample_path(),
+                    size: 10,
+                    max: 5,
+                },
+                error_codes::FILE_TOO_LARGE,
+            ),
+            (
+                PctxError::InvalidPattern {
+                    pattern: "[".into(),
+                    reason: "unclosed".into(),
+                },
+                error_codes::INVALID_PATTERN,
+            ),
+            (
+                PctxError::EncodingError {
+                    path: sample_path(),
+                    reason: "not utf8".into(),
+                },
+                error_codes::ENCODING_ERROR,
+            ),
+            (PctxError::GitError("boom".into()), error_codes::GIT_ERROR),
+            (
+                PctxError::ConfigError("bad".into()),
+                error_codes::CONFIG_ERROR,
+            ),
+            (
+                PctxError::ClipboardError("nope".into()),
+                error_codes::CLIPBOARD_ERROR,
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.code(), expected, "code mismatch for {err:?}");
+        }
+    }
+
+    #[test]
+    fn exit_code_maps_key_variants() {
+        assert_eq!(
+            PctxError::FileNotFound(sample_path()).exit_code(),
+            exit::NOT_FOUND
+        );
+        assert_eq!(
+            PctxError::DirectoryNotFound(sample_path()).exit_code(),
+            exit::NOT_FOUND
+        );
+        assert_eq!(
+            PctxError::PermissionDenied(sample_path()).exit_code(),
+            exit::PERMISSION_DENIED
+        );
+        assert_eq!(
+            PctxError::OutputExists(sample_path()).exit_code(),
+            exit::CONFLICT
+        );
+        assert_eq!(
+            PctxError::InvalidPattern {
+                pattern: "x".into(),
+                reason: "y".into()
+            }
+            .exit_code(),
+            exit::USAGE_ERROR
+        );
+        assert_eq!(
+            PctxError::ConfigError("bad".into()).exit_code(),
+            exit::USAGE_ERROR
+        );
+        // Catch-all variants fall through to FAILURE
+        assert_eq!(
+            PctxError::BinaryFile(sample_path()).exit_code(),
+            exit::FAILURE
+        );
+        assert_eq!(
+            PctxError::ClipboardError("x".into()).exit_code(),
+            exit::FAILURE
+        );
+    }
+
+    #[test]
+    fn suggestion_present_for_actionable_variants() {
+        assert!(PctxError::FileNotFound(sample_path())
+            .suggestion()
+            .is_some());
+        assert!(PctxError::OutputExists(sample_path())
+            .suggestion()
+            .is_some());
+        assert!(PctxError::BinaryFile(sample_path()).suggestion().is_some());
+        assert!(PctxError::FileTooLarge {
+            path: sample_path(),
+            size: 10,
+            max: 5
+        }
+        .suggestion()
+        .is_some());
+        assert!(PctxError::ClipboardError("x".into()).suggestion().is_some());
+
+        // The suggestion for --force should mention --force
+        let s = PctxError::OutputExists(sample_path()).suggestion().unwrap();
+        assert!(s.contains("--force"), "expected --force in suggestion: {s}");
+    }
+
+    #[test]
+    fn is_transient_only_for_io_git_clipboard() {
+        assert!(PctxError::ClipboardError("x".into()).is_transient());
+        assert!(PctxError::GitError("x".into()).is_transient());
+        assert!(!PctxError::FileNotFound(sample_path()).is_transient());
+        assert!(!PctxError::OutputExists(sample_path()).is_transient());
+        assert!(!PctxError::InvalidPattern {
+            pattern: "x".into(),
+            reason: "y".into(),
+        }
+        .is_transient());
+    }
+
+    #[test]
+    fn input_context_shape() {
+        // Path-carrying variants return { "path": ... }
+        let ctx = PctxError::FileNotFound(PathBuf::from("/tmp/x"))
+            .input_context()
+            .unwrap();
+        assert_eq!(ctx["path"], "/tmp/x");
+
+        // FileTooLarge: path + size_bytes + max_bytes
+        let ctx = PctxError::FileTooLarge {
+            path: PathBuf::from("/tmp/big"),
+            size: 2048,
+            max: 1024,
+        }
+        .input_context()
+        .unwrap();
+        assert_eq!(ctx["path"], "/tmp/big");
+        assert_eq!(ctx["size_bytes"], 2048);
+        assert_eq!(ctx["max_bytes"], 1024);
+
+        // InvalidPattern: pattern + reason
+        let ctx = PctxError::InvalidPattern {
+            pattern: "[bad".into(),
+            reason: "unclosed bracket".into(),
+        }
+        .input_context()
+        .unwrap();
+        assert_eq!(ctx["pattern"], "[bad");
+        assert_eq!(ctx["reason"], "unclosed bracket");
+
+        // Variants without structured context return None
+        assert!(PctxError::ClipboardError("x".into())
+            .input_context()
+            .is_none());
+        assert!(PctxError::GitError("x".into()).input_context().is_none());
+    }
+}

@@ -46,6 +46,7 @@ anyhow = "1.0"
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+insta = "1.41"
 
 [features]
 default = ["clipboard", "tokens"]

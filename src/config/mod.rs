@@ -221,3 +221,138 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::file::FileConfig;
+
+    fn base_filter() -> FilterArgs {
+        FilterArgs {
+            exclude: Vec::new(),
+            include: Vec::new(),
+            hidden: false,
+            no_default_excludes: false,
+            no_gitignore: false,
+            max_size: 1024,
+            max_depth: 0,
+        }
+    }
+
+    fn base_trunc() -> TruncationArgs {
+        TruncationArgs {
+            no_truncation: false,
+            max_lines: None,
+            head_lines: None,
+            tail_lines: None,
+            max_line_length: None,
+            head_chars: None,
+            tail_chars: None,
+        }
+    }
+
+    #[test]
+    fn build_patterns_precedence_defaults_file_cli() {
+        let mut filter = base_filter();
+        filter.exclude = vec!["cli-exclude".into()];
+        filter.include = vec!["cli-include".into()];
+        let file_cfg = FileConfig {
+            exclude: vec!["file-exclude".into()],
+            include: vec!["file-include".into()],
+            ..Default::default()
+        };
+
+        let (excl, incl) = Config::build_patterns(&filter, Some(&file_cfg));
+
+        // Defaults come first
+        assert_eq!(excl[0], defaults::DEFAULT_EXCLUDES[0]);
+        // Then file, then CLI
+        let defaults_len = defaults::DEFAULT_EXCLUDES.len();
+        assert_eq!(excl[defaults_len], "file-exclude");
+        assert_eq!(excl[defaults_len + 1], "cli-exclude");
+
+        // Include: file first, then CLI
+        assert_eq!(incl, vec!["file-include", "cli-include"]);
+    }
+
+    #[test]
+    fn build_patterns_no_default_excludes_zeros_defaults() {
+        let mut filter = base_filter();
+        filter.no_default_excludes = true;
+        filter.exclude = vec!["only".into()];
+
+        let (excl, _) = Config::build_patterns(&filter, None);
+        assert_eq!(excl, vec!["only"]);
+    }
+
+    #[test]
+    fn build_patterns_without_file_config() {
+        let filter = base_filter();
+        let (excl, incl) = Config::build_patterns(&filter, None);
+
+        assert_eq!(excl.len(), defaults::DEFAULT_EXCLUDES.len());
+        assert!(incl.is_empty());
+    }
+
+    #[test]
+    fn build_truncation_no_truncation_short_circuits() {
+        let mut trunc = base_trunc();
+        trunc.no_truncation = true;
+        let file_cfg = FileConfig {
+            max_lines: Some(999),
+            head_lines: Some(42),
+            ..Default::default()
+        };
+
+        let result = Config::build_truncation(&trunc, Some(&file_cfg));
+
+        // max_lines and max_line_length are zeroed
+        assert_eq!(result.max_lines, 0);
+        assert_eq!(result.max_line_length, 0);
+        // Other defaults are preserved (file_cfg is ignored)
+        let defaults = TruncationConfig::default();
+        assert_eq!(result.head_lines, defaults.head_lines);
+        assert_eq!(result.tail_lines, defaults.tail_lines);
+        assert_eq!(result.head_chars, defaults.head_chars);
+        assert_eq!(result.tail_chars, defaults.tail_chars);
+    }
+
+    #[test]
+    fn build_truncation_cli_overrides_file_overrides_default() {
+        let mut trunc = base_trunc();
+        trunc.max_lines = Some(100); // CLI overrides file
+                                     // head_lines not set on CLI — should fall to file
+        let file_cfg = FileConfig {
+            max_lines: Some(999),
+            head_lines: Some(7),
+            ..Default::default()
+        };
+
+        let result = Config::build_truncation(&trunc, Some(&file_cfg));
+
+        assert_eq!(result.max_lines, 100); // CLI wins
+        assert_eq!(result.head_lines, 7); // file wins
+        assert_eq!(result.tail_lines, TruncationConfig::default().tail_lines); // default wins
+    }
+
+    #[test]
+    fn build_truncation_no_file_config_uses_cli_or_default() {
+        let mut trunc = base_trunc();
+        trunc.max_line_length = Some(80);
+
+        let result = Config::build_truncation(&trunc, None);
+
+        assert_eq!(result.max_line_length, 80);
+        assert_eq!(result.max_lines, TruncationConfig::default().max_lines);
+    }
+
+    #[test]
+    fn truncation_config_defaults_are_nonzero() {
+        // Sanity: the defaults the builder falls back to aren't accidentally zero.
+        let d = TruncationConfig::default();
+        assert!(d.max_lines > 0);
+        assert!(d.max_line_length > 0);
+        assert!(d.head_lines > 0);
+        assert!(d.tail_lines > 0);
+    }
+}

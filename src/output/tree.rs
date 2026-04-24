@@ -107,4 +107,33 @@ mod tests {
         assert!(src.children.contains_key("lib.rs"));
         assert!(src.children.contains_key("config"));
     }
+
+    #[test]
+    fn snapshot_tree_single_file() {
+        let tree = build_tree(&[PathBuf::from("only.txt")]);
+        insta::assert_snapshot!(tree_to_string(&tree));
+    }
+
+    #[test]
+    fn snapshot_tree_siblings_and_nested() {
+        let tree = build_tree(&[
+            PathBuf::from("Cargo.toml"),
+            PathBuf::from("README.md"),
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("src/config/mod.rs"),
+            PathBuf::from("src/config/defaults.rs"),
+        ]);
+        insta::assert_snapshot!(tree_to_string(&tree));
+    }
+
+    #[test]
+    fn snapshot_tree_deep_nest() {
+        let tree = build_tree(&[
+            PathBuf::from("a/b/c/d/deep.rs"),
+            PathBuf::from("a/b/c/sibling.rs"),
+            PathBuf::from("a/top.rs"),
+        ]);
+        insta::assert_snapshot!(tree_to_string(&tree));
+    }
 }

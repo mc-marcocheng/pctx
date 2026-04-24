@@ -1,0 +1,27 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+## File Tree
+
+```
+README.md
+src
+├── lib.rs
+└── main.rs
+```
+
+`src/main.rs`:
+```rust
+fn main() {}
+```
+
+`src/lib.rs`:
+```rust
+pub fn a() {}
+```
+
+`README.md`:
+```markdown
+# R
+```

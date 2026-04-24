@@ -1,0 +1,14 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+=== File Tree ===
+src
+├── a.txt
+└── b.txt
+
+=== src/a.txt ===
+alpha
+
+=== src/b.txt ===
+bravo

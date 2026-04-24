@@ -1,0 +1,12 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+`doc.md`:
+````markdown
+Example:
+```
+code
+```
+End.
+````

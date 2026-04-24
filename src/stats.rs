@@ -140,3 +140,101 @@ fn format_bytes(bytes: usize) -> String {
         format!("{} bytes", bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_entry(lines: usize, bytes: usize, truncated: bool) -> FileEntry {
+        FileEntry {
+            absolute_path: PathBuf::from("/tmp/x"),
+            relative_path: "x".into(),
+            extension: String::new(),
+            original_bytes: bytes,
+            original_lines: lines,
+            line_count: lines,
+            truncated,
+            truncated_lines: if truncated { 5 } else { 0 },
+            content: String::new(),
+        }
+    }
+
+    #[test]
+    fn format_number_inserts_thousand_separators() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(999), "999");
+        assert_eq!(format_number(1_000), "1,000");
+        assert_eq!(format_number(12_345), "12,345");
+        assert_eq!(format_number(1_000_000), "1,000,000");
+        assert_eq!(format_number(1_234_567_890), "1,234,567,890");
+    }
+
+    #[test]
+    fn format_bytes_picks_correct_unit() {
+        assert_eq!(format_bytes(0), "0 bytes");
+        assert_eq!(format_bytes(1023), "1023 bytes");
+        // KB boundary
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+        // MB boundary
+        assert_eq!(format_bytes(1024 * 1024 - 1), "1024.00 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
+        // GB boundary
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
+    }
+
+    #[test]
+    fn add_file_accumulates_counters() {
+        let mut stats = Stats::new();
+        stats.add_file(&make_entry(10, 100, false));
+        stats.add_file(&make_entry(20, 200, true));
+        stats.add_file(&make_entry(5, 50, false));
+
+        assert_eq!(stats.file_count, 3);
+        assert_eq!(stats.total_lines, 35);
+        assert_eq!(stats.total_bytes, 350);
+        assert_eq!(stats.truncated_count, 1);
+    }
+
+    #[test]
+    fn add_file_truncated_flag_increments_only_on_true() {
+        let mut stats = Stats::new();
+        for _ in 0..5 {
+            stats.add_file(&make_entry(1, 1, false));
+        }
+        assert_eq!(stats.truncated_count, 0);
+
+        for _ in 0..3 {
+            stats.add_file(&make_entry(1, 1, true));
+        }
+        assert_eq!(stats.truncated_count, 3);
+    }
+
+    #[test]
+    fn estimate_tokens_produces_estimate() {
+        let mut stats = Stats::new();
+        stats.estimate_tokens("hello world, this is some content", "gpt-4");
+        // Must populate the field; exact count varies between fallback (len/4)
+        // and the tiktoken-backed implementation, so just assert presence/sanity.
+        let estimate = stats.token_estimate.expect("token estimate populated");
+        assert!(estimate > 0);
+    }
+
+    #[test]
+    fn estimate_tokens_on_empty_content() {
+        let mut stats = Stats::new();
+        stats.estimate_tokens("", "gpt-4");
+        assert_eq!(stats.token_estimate, Some(0));
+    }
+
+    #[test]
+    fn new_starts_at_zero() {
+        let stats = Stats::new();
+        assert_eq!(stats.file_count, 0);
+        assert_eq!(stats.total_lines, 0);
+        assert_eq!(stats.total_bytes, 0);
+        assert_eq!(stats.truncated_count, 0);
+        assert!(stats.token_estimate.is_none());
+    }
+}

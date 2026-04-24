@@ -133,3 +133,106 @@ exclude = [
     file.write_all(template.as_bytes())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn load_config_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".pctx.toml");
+        fs::write(
+            &path,
+            r#"exclude = ["*.foo", "*.bar"]
+include = ["*.rs"]
+max_lines = 123
+head_chars = 45
+"#,
+        )
+        .unwrap();
+
+        let cfg = load_config(&path).unwrap();
+        assert_eq!(cfg.exclude, vec!["*.foo", "*.bar"]);
+        assert_eq!(cfg.include, vec!["*.rs"]);
+        assert_eq!(cfg.max_lines, Some(123));
+        assert_eq!(cfg.head_chars, Some(45));
+        // Unspecified fields fall back to None
+        assert_eq!(cfg.tail_lines, None);
+    }
+
+    #[test]
+    fn load_config_empty_file_yields_defaults() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".pctx.toml");
+        fs::write(&path, "").unwrap();
+
+        let cfg = load_config(&path).unwrap();
+        assert!(cfg.exclude.is_empty());
+        assert!(cfg.include.is_empty());
+        assert_eq!(cfg.max_lines, None);
+    }
+
+    #[test]
+    fn load_config_missing_file_returns_file_not_found() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+
+        match load_config(&path) {
+            Err(PctxError::FileNotFound(p)) => assert_eq!(p, path),
+            other => panic!("expected FileNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_config_malformed_toml_returns_toml_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".pctx.toml");
+        fs::write(&path, "this is = not [valid toml").unwrap();
+
+        match load_config(&path) {
+            Err(PctxError::Toml(_)) => {}
+            other => panic!("expected Toml error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_template_refuses_existing_without_force() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".pctx.toml");
+        fs::write(&path, "pre-existing").unwrap();
+
+        match write_template(&path, false) {
+            Err(PctxError::OutputExists(p)) => assert_eq!(p, path),
+            other => panic!("expected OutputExists, got {other:?}"),
+        }
+        // File untouched
+        assert_eq!(fs::read_to_string(&path).unwrap(), "pre-existing");
+    }
+
+    #[test]
+    fn write_template_force_overwrites() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".pctx.toml");
+        fs::write(&path, "pre-existing").unwrap();
+
+        write_template(&path, true).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("pctx configuration"));
+        assert!(!written.contains("pre-existing"));
+    }
+
+    #[test]
+    fn write_template_creates_when_absent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".pctx.toml");
+        assert!(!path.exists());
+
+        write_template(&path, false).unwrap();
+        assert!(path.exists());
+        let cfg = load_config(&path).unwrap();
+        // The template's commented-out overrides should still parse (none active)
+        assert!(!cfg.exclude.is_empty());
+    }
+}

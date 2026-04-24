@@ -1,0 +1,12 @@
+---
+source: src/output/tree.rs
+expression: tree_to_string(&tree)
+---
+Cargo.toml
+README.md
+src
+├── config
+│   ├── defaults.rs
+│   └── mod.rs
+├── lib.rs
+└── main.rs

@@ -1,0 +1,17 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+`src/lib.rs`:
+```rust
+pub fn hello() {
+    println!("hi");
+}
+```
+
+`README.md`:
+```markdown
+# Title
+
+Body.
+```

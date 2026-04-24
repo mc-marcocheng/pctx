@@ -1,0 +1,11 @@
+---
+source: src/output/tree.rs
+expression: tree_to_string(&tree)
+---
+a
+├── b
+│   └── c
+│       ├── d
+│       │   └── deep.rs
+│       └── sibling.rs
+└── top.rs

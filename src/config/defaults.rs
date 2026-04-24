@@ -194,3 +194,31 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
     "context.md",
     "context.txt",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn default_excludes_non_empty_and_unique() {
+        assert!(!DEFAULT_EXCLUDES.is_empty());
+        let set: HashSet<&&str> = DEFAULT_EXCLUDES.iter().collect();
+        assert_eq!(
+            set.len(),
+            DEFAULT_EXCLUDES.len(),
+            "DEFAULT_EXCLUDES contains duplicates"
+        );
+    }
+
+    #[test]
+    fn default_excludes_contains_canonical_entries() {
+        // Common expectations users and docs rely on.
+        for expected in &[".git", "node_modules", "target", ".DS_Store"] {
+            assert!(
+                DEFAULT_EXCLUDES.contains(expected),
+                "missing canonical default: {expected}"
+            );
+        }
+    }
+}

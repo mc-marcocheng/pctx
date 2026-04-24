@@ -1,0 +1,17 @@
+---
+source: src/output/formatter.rs
+expression: output
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<context>
+  <file path="src/lib.rs" language="rust">
+<![CDATA[
+pub fn hello() {}
+]]>
+  </file>
+  <file path="data.json" language="json">
+<![CDATA[
+{"k": 1}
+]]>
+  </file>
+</context>

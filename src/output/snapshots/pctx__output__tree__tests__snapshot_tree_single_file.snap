@@ -1,0 +1,5 @@
+---
+source: src/output/tree.rs
+expression: tree_to_string(&tree)
+---
+only.txt
