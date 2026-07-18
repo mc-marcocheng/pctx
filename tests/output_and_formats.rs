@@ -323,3 +323,30 @@ fn test_line_truncation_no_extra_newlines() {
     // Should not have multiple consecutive newlines around the truncation marker
     assert!(!stdout.contains("\n\n\n"));
 }
+
+#[test]
+fn test_hidden_directory_no_match_json_suggests_hidden() {
+    let dir = TempDir::new().unwrap();
+
+    // A directory whose only content is a dot-prefixed path is hidden by
+    // default, so scanning it without --hidden yields no matches.
+    let workflows = dir.path().join(".github").join("workflows");
+    fs::create_dir_all(&workflows).unwrap();
+    fs::write(workflows.join("ci.yml"), "name: CI\n").unwrap();
+
+    let assertion = pctx()
+        .current_dir(dir.path())
+        .args(["--json", "--no-default-excludes"])
+        .assert()
+        .code(6);
+
+    let response: serde_json::Value =
+        serde_json::from_slice(&assertion.get_output().stdout).unwrap();
+
+    assert_eq!(response["status"], "error");
+    assert_eq!(response["code"], "no_files_matched");
+    assert_eq!(response["input"]["hidden"], false);
+
+    let suggestion = response["suggestion"].as_str().unwrap();
+    assert!(suggestion.contains("--hidden"));
+}

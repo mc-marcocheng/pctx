@@ -288,3 +288,47 @@ fn test_absolute_paths_flag() {
     // Should contain absolute path
     assert!(stdout.contains(&dir_path));
 }
+
+#[test]
+fn test_explicit_hidden_directory_no_match_suggests_hidden() {
+    let dir = TempDir::new().unwrap();
+
+    // A directory whose only content is a dot-prefixed path is hidden by
+    // default, so scanning it without --hidden yields no matches.
+    let workflows = dir.path().join(".github").join("workflows");
+    fs::create_dir_all(&workflows).unwrap();
+    fs::write(workflows.join("ci.yml"), "name: CI\n").unwrap();
+
+    let assertion = pctx()
+        .current_dir(dir.path())
+        .args(["--no-default-excludes"])
+        .assert()
+        .code(6);
+
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr);
+
+    assert!(stderr.contains("No files matched"));
+    assert!(stderr.contains("--hidden"));
+    assert!(stderr.contains("hidden by default"));
+
+    // Do not repeat the old, incorrect recommendation to enable a flag that
+    // was already supplied.
+    assert!(!stderr.contains("Hint: use --no-default-excludes"));
+}
+
+#[test]
+fn test_explicit_hidden_directory_included_with_hidden_flag() {
+    let dir = TempDir::new().unwrap();
+
+    let workflows = dir.path().join(".github").join("workflows");
+    fs::create_dir_all(&workflows).unwrap();
+    fs::write(workflows.join("ci.yml"), "name: CI\n").unwrap();
+
+    pctx()
+        .current_dir(dir.path())
+        .args(["--hidden", "--no-default-excludes", ".github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ci.yml"))
+        .stdout(predicate::str::contains("name: CI"));
+}

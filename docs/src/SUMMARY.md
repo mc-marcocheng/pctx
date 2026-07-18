@@ -4,4 +4,5 @@
 - [Installation](installation.md)
 - [Usage](usage.md)
 - [Configuration](configuration.md)
-- [Architecture](architecture.md)
+- [JSON & Exit Codes](json.md)
+- [Architecture & Developer Guide](architecture.md)

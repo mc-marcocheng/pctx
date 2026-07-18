@@ -3,3 +3,4 @@ authors = ["mc-marcocheng"]
 language = "en"
 src = "src"
 title = "pctx Documentation"
+description = "Generate LLM-ready context from your codebase with filtering, truncation, and structured output."

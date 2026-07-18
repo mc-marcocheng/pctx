@@ -3,7 +3,7 @@
 //! This is the main entry point for the CLI application.
 
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -88,7 +88,7 @@ fn run_generate_command(
     let scan_result = if args.stdin {
         let paths = read_paths_from_stdin()?;
         if paths.is_empty() {
-            return handle_no_files_matched(args, global);
+            return handle_no_files_matched(args, global, &config);
         }
         scanner.scan_paths(paths)?
     } else {
@@ -99,7 +99,7 @@ fn run_generate_command(
         if let Some((_, err)) = scan_result.errors.into_iter().next() {
             return Err(err);
         }
-        return handle_no_files_matched(args, global);
+        return handle_no_files_matched(args, global, &config);
     }
 
     let files = scan_result.files;
@@ -244,10 +244,98 @@ fn read_paths_from_stdin() -> Result<Vec<PathBuf>, PctxError> {
     Ok(paths)
 }
 
+/// Return true when a path contains a dot-prefixed normal component.
+///
+/// Examples:
+/// - `.github`
+/// - `./.github/workflows`
+/// - `project/.config/file.toml`
+///
+/// `.` and `..` are represented as separate Component variants and therefore
+/// are not treated as hidden names.
+fn has_hidden_component(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        Component::Normal(name) => name.to_string_lossy().starts_with('.'),
+        _ => false,
+    })
+}
+
+/// Build contextual suggestions for an empty scan result.
+///
+/// Filtering layers are independent:
+/// - `--hidden` controls dot-prefixed paths
+/// - `--no-default-excludes` controls built-in patterns
+/// - `--no-gitignore` controls gitignore rules
+fn no_match_hints(args: &pctx::cli::GenerateArgs, config: &Config) -> Vec<String> {
+    // An explicitly requested hidden path is the strongest available signal.
+    if !config.include_hidden {
+        if let Some(path) = args.paths.iter().find(|path| has_hidden_component(path)) {
+            return vec![format!(
+                "`{}` contains a dot-prefixed path component and is hidden by default. \
+                 Add `--hidden`. `--no-default-excludes` only disables built-in \
+                 exclusion patterns.",
+                path.display()
+            )];
+        }
+    }
+
+    let mut hints = Vec::new();
+
+    if !config.include_patterns.is_empty() {
+        hints.push(
+            "Include patterns are active; check whether the files match `--include` \
+             or the `include` entries in `.pctx.toml`."
+                .to_string(),
+        );
+    }
+
+    if !args.filter.exclude.is_empty() {
+        hints.push(
+            "Custom exclude patterns are active; check the supplied `--exclude` patterns."
+                .to_string(),
+        );
+    }
+
+    if !config.include_hidden {
+        hints.push(
+            "Dot-prefixed files and directories are hidden by default; add `--hidden` \
+             if they should be included."
+                .to_string(),
+        );
+    }
+
+    if config.use_default_excludes {
+        hints.push(
+            "Built-in exclusions are active; add `--no-default-excludes` to disable them."
+                .to_string(),
+        );
+    }
+
+    if config.use_gitignore {
+        hints.push(
+            "Gitignore rules are active; add `--no-gitignore` to ignore those rules.".to_string(),
+        );
+    }
+
+    if hints.is_empty() {
+        hints.push(
+            "Check that the selected paths contain readable, non-binary files within \
+             the configured size and depth limits."
+                .to_string(),
+        );
+    }
+
+    hints
+}
+
 fn handle_no_files_matched(
     args: &pctx::cli::GenerateArgs,
     global: &pctx::cli::GlobalArgs,
+    config: &Config,
 ) -> Result<i32, PctxError> {
+    let hints = no_match_hints(args, config);
+    let suggestion = hints.join(" ");
+
     if global.json {
         let response = JsonResponse::Error(ErrorResponse {
             code: error_codes::NO_FILES_MATCHED.to_string(),
@@ -256,17 +344,26 @@ fn handle_no_files_matched(
                 "paths": args.paths,
                 "exclude": args.filter.exclude,
                 "include": args.filter.include,
+                "hidden": args.filter.hidden,
+                "no_default_excludes": args.filter.no_default_excludes,
+                "no_gitignore": args.filter.no_gitignore,
+                "max_size_kb": args.filter.max_size,
+                "max_depth": args.filter.max_depth,
                 "stdin": args.stdin,
             })),
-            suggestion: Some("Try broadening your filters or checking the paths exist".to_string()),
+            suggestion: Some(suggestion),
             transient: false,
             exit_code: exit::NO_MATCH,
         });
+
         println!("{}", serde_json::to_string_pretty(&response)?);
     } else if !global.quiet {
         eprintln!("No files matched the specified filters.");
-        eprintln!("Hint: use --no-default-excludes to include commonly excluded directories");
+        for hint in hints {
+            eprintln!("Hint: {}", hint);
+        }
     }
+
     Ok(exit::NO_MATCH)
 }
 

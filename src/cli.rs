@@ -233,8 +233,14 @@ pub struct FilterArgs {
     #[arg(short, long = "include", value_name = "PATTERN")]
     pub include: Vec<String>,
 
-    /// Include hidden files and directories (starting with .)
-    #[arg(long)]
+    /// Include dot-prefixed files and directories such as `.github`
+    #[arg(
+        long,
+        long_help = "Include dot-prefixed files and directories such as `.github`.\n\n\
+                     Hidden-path filtering is independent of built-in exclusions and \
+                     .gitignore rules. `--no-default-excludes` and `--no-gitignore` do \
+                     not enable hidden paths."
+    )]
     pub hidden: bool,
 
     /// Disable default exclusion patterns
