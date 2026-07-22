@@ -70,6 +70,21 @@ impl<'a> ContentProcessor<'a> {
         Self { config, base_path }
     }
 
+    /// Resolve the display path for a canonicalized file path, preferring
+    /// the most specific configured path alias over the scan base path.
+    fn relative_display_path(&self, clean_path: &Path) -> PathBuf {
+        for mapping in &self.config.path_aliases {
+            if let Ok(relative) = clean_path.strip_prefix(&mapping.root) {
+                return PathBuf::from(&mapping.alias).join(relative);
+            }
+        }
+
+        clean_path
+            .strip_prefix(&self.base_path)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| clean_path.to_path_buf())
+    }
+
     /// Process a file and return a FileEntry
     pub fn process(&self, path: &Path) -> Result<FileEntry, PctxError> {
         // Check if binary
@@ -90,10 +105,7 @@ impl<'a> ContentProcessor<'a> {
 
         let clean_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
-        let relative_path = clean_path
-            .strip_prefix(&self.base_path)
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|_| clean_path.clone());
+        let relative_path = self.relative_display_path(&clean_path);
 
         let extension = path
             .extension()
@@ -125,6 +137,7 @@ mod tests {
     fn create_test_config() -> Config {
         Config {
             paths: vec![],
+            path_aliases: vec![],
             exclude_patterns: vec![],
             include_patterns: vec![],
             include_hidden: false,
@@ -420,5 +433,88 @@ mod tests {
 
         // Content should preserve original line endings
         assert!(entry.content.contains("\r\n") || entry.content.contains('\n'));
+    }
+
+    #[test]
+    fn test_content_processor_path_alias_rewrites_relative_path() {
+        use crate::config::PathAlias;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("main.rs");
+        fs::write(&file_path, "fn main() {}").unwrap();
+
+        let mut config = create_test_config();
+        config.path_aliases = vec![PathAlias {
+            alias: "api".to_string(),
+            root: dunce::canonicalize(dir.path()).unwrap(),
+        }];
+
+        // Base path is unrelated to the aliased root.
+        let other_dir = TempDir::new().unwrap();
+        let processor = ContentProcessor::with_base_path(&config, other_dir.path().to_path_buf());
+
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(
+            entry.relative_path,
+            PathBuf::from("api").join("main.rs").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_content_processor_nested_alias_uses_most_specific_root() {
+        use crate::config::PathAlias;
+
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let file_path = nested.join("file.rs");
+        fs::write(&file_path, "content").unwrap();
+
+        let canonical_dir = dunce::canonicalize(dir.path()).unwrap();
+        let canonical_nested = dunce::canonicalize(&nested).unwrap();
+
+        let mut config = create_test_config();
+        // Most specific (deepest) root must be sorted first to win.
+        config.path_aliases = vec![
+            PathAlias {
+                alias: "inner".to_string(),
+                root: canonical_nested,
+            },
+            PathAlias {
+                alias: "outer".to_string(),
+                root: canonical_dir,
+            },
+        ];
+
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+        let entry = processor.process(&file_path).unwrap();
+
+        assert_eq!(
+            entry.relative_path,
+            PathBuf::from("inner").join("file.rs").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_content_processor_absolute_paths_ignore_alias() {
+        use crate::config::PathAlias;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("main.rs");
+        fs::write(&file_path, "fn main() {}").unwrap();
+
+        let mut config = create_test_config();
+        config.path_aliases = vec![PathAlias {
+            alias: "api".to_string(),
+            root: dunce::canonicalize(dir.path()).unwrap(),
+        }];
+
+        let processor = ContentProcessor::with_base_path(&config, dir.path().to_path_buf());
+        let entry = processor.process(&file_path).unwrap();
+
+        // display_path(true) uses the absolute path regardless of aliases.
+        assert!(!entry.display_path(true).starts_with("api"));
+        assert!(entry.display_path(true).ends_with("main.rs"));
     }
 }

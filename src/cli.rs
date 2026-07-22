@@ -56,6 +56,28 @@ EXAMPLES:
   find . -name "*.rs" | pctx --stdin
   pctx files list --quiet | pctx --stdin
 
+  # NUL-delimited stdin (safe for paths with spaces/newlines)
+  find . -type f -print0 | pctx --stdin0
+
+  # NUL-delimited path file (avoids command-line length limits)
+  pctx --paths-file0 selected-paths.bin
+
+  # Explicit configuration file
+  pctx --config /workspace/.pctx.toml
+
+  # Ignore all config files
+  pctx --no-config
+
+  # Combine unrelated roots without exposing absolute paths
+  pctx \
+    /home/me/api/src/main.rs \
+    /home/me/shared/src/lib.rs \
+    --path-alias api=/home/me/api \
+    --path-alias shared=/home/me/shared
+
+  # Machine-readable capabilities for integrations
+  pctx --json capabilities
+
   # List files without generating context
   pctx files list --json
 
@@ -98,6 +120,9 @@ pub enum Commands {
     /// Configuration management
     #[command(subcommand)]
     Config(ConfigCommands),
+
+    /// Describe machine-readable features supported by this build
+    Capabilities,
 
     /// Generate shell completions
     Completions {
@@ -185,8 +210,12 @@ pub struct GlobalArgs {
     pub quiet: bool,
 
     /// Path to config file [default: .pctx.toml in current or parent dirs]
-    #[arg(long, global = true, value_name = "FILE")]
+    #[arg(long, global = true, value_name = "FILE", conflicts_with = "no_config")]
     pub config: Option<PathBuf>,
+
+    /// Disable automatic and explicit .pctx.toml loading
+    #[arg(long, global = true, conflicts_with = "config")]
+    pub no_config: bool,
 
     /// Disable colored output
     #[arg(long, global = true)]
@@ -218,8 +247,20 @@ pub struct GenerateArgs {
     pub token_model: String,
 
     /// Read file paths from stdin (one per line)
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["stdin0", "paths_file0"])]
     pub stdin: bool,
+
+    /// Read NUL-delimited file paths from stdin
+    #[arg(long, conflicts_with_all = ["stdin", "paths_file0"])]
+    pub stdin0: bool,
+
+    /// Read NUL-delimited file paths from a file
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["stdin", "stdin0"])]
+    pub paths_file0: Option<PathBuf>,
+
+    /// Map a directory to a display alias, for example: api=/home/me/api
+    #[arg(long = "path-alias", value_name = "ALIAS=PATH")]
+    pub path_aliases: Vec<String>,
 }
 
 /// Arguments for filtering which files to include

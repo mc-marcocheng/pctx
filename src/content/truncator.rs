@@ -57,30 +57,39 @@ pub fn truncate_content(content: &str, config: &TruncationConfig) -> (String, bo
     };
 
     // Process each line for length truncation
-    let final_lines: Vec<String> = processed_lines
-        .iter()
-        .map(|line| truncate_line(line, config))
-        .collect();
+    let mut final_lines = Vec::with_capacity(processed_lines.len());
+
+    for line in &processed_lines {
+        let (processed, line_truncated) = truncate_line(line, config);
+
+        if line_truncated {
+            truncated = true;
+        }
+
+        final_lines.push(processed);
+    }
 
     let result = final_lines.join("\n");
 
     (result, truncated, truncated_lines)
 }
 
-/// Truncate a single line if it exceeds the maximum length
-fn truncate_line(line: &str, config: &TruncationConfig) -> String {
+/// Truncate a single line if it exceeds the maximum length.
+///
+/// Returns the (possibly unchanged) line and whether it was truncated.
+fn truncate_line(line: &str, config: &TruncationConfig) -> (String, bool) {
     if config.max_line_length == 0 {
-        return line.to_string();
+        return (line.to_string(), false);
     }
 
     // Don't truncate our own truncation markers
     if line.contains(LINES_OMITTED_MARKER) {
-        return line.to_string();
+        return (line.to_string(), false);
     }
 
     let char_count = line.chars().count();
     if char_count <= config.max_line_length {
-        return line.to_string();
+        return (line.to_string(), false);
     }
 
     let chars: Vec<char> = line.chars().collect();
@@ -89,17 +98,20 @@ fn truncate_line(line: &str, config: &TruncationConfig) -> String {
         .tail_chars
         .min(chars.len().saturating_sub(head_count));
 
+    let omitted = chars.len().saturating_sub(head_count + tail_count);
+
+    if omitted == 0 {
+        return (line.to_string(), false);
+    }
+
     let head: String = chars[..head_count].iter().collect();
     let tail_start = chars.len().saturating_sub(tail_count);
     let tail: String = chars[tail_start..].iter().collect();
 
-    let omitted = chars.len().saturating_sub(head_count + tail_count);
-
-    if omitted > 0 {
-        format!("{}[...{} chars omitted...]{}", head, omitted, tail)
-    } else {
-        line.to_string()
-    }
+    (
+        format!("{}[...{} chars omitted...]{}", head, omitted, tail),
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -243,5 +255,23 @@ mod tests {
 
         // The marker should be intact, not truncated
         assert!(result.contains("lines omitted"));
+    }
+
+    #[test]
+    fn long_line_sets_truncated_flag() {
+        let config = TruncationConfig {
+            max_lines: 0,
+            head_lines: 20,
+            tail_lines: 10,
+            max_line_length: 10,
+            head_chars: 3,
+            tail_chars: 3,
+        };
+
+        let (_, truncated, truncated_lines) =
+            truncate_content("abcdefghijklmnopqrstuvwxyz", &config);
+
+        assert!(truncated);
+        assert_eq!(truncated_lines, 0);
     }
 }

@@ -26,7 +26,8 @@ Generate LLM-ready context from your codebase. Intelligently packages source fil
 - **Flexible filtering**: Include/exclude patterns with gitignore-style syntax
 - **Multiple destinations**: stdout, clipboard, or file output
 - **JSON mode**: Structured output for programmatic use and CI/CD integration
-- **Stdin support**: Read file lists from pipes for integration with other tools
+- **Stdin support**: Read file lists from pipes, including NUL-delimited input (`--stdin0`, `--paths-file0`), for integration with other tools
+- **Path aliases**: Combine files from unrelated roots under short display names with `--path-alias`
 - **Token estimation**: Approximate token counts for various LLM models
 
 ## Installation

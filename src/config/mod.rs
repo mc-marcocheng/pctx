@@ -8,10 +8,18 @@
 pub mod defaults;
 pub mod file;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::cli::{ContentFormat, FilterArgs, GenerateArgs, GlobalArgs, TruncationArgs};
 use crate::error::PctxError;
+
+/// A resolved path alias mapping a display name to a canonicalized root directory
+#[derive(Debug, Clone)]
+pub struct PathAlias {
+    pub alias: String,
+    pub root: PathBuf,
+}
 
 /// Truncation settings for long files and lines
 #[derive(Debug, Clone)]
@@ -41,6 +49,7 @@ impl Default for TruncationConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub paths: Vec<PathBuf>,
+    pub path_aliases: Vec<PathAlias>,
     pub exclude_patterns: Vec<String>,
     pub include_patterns: Vec<String>,
     pub include_hidden: bool,
@@ -68,12 +77,15 @@ impl Config {
         // Merge truncation settings: CLI args override file config
         let truncation = Self::build_truncation(&args.truncation, file_config.as_ref());
 
+        let path_aliases = Self::build_path_aliases(&args.path_aliases)?;
+
         Ok(Self {
             paths: if args.paths.is_empty() {
                 vec![PathBuf::from(".")]
             } else {
                 args.paths.clone()
             },
+            path_aliases,
             exclude_patterns,
             include_patterns,
             include_hidden: args.filter.hidden,
@@ -104,6 +116,7 @@ impl Config {
 
         Ok(Self {
             paths: vec![PathBuf::from(".")],
+            path_aliases: Vec::new(),
             exclude_patterns,
             include_patterns,
             include_hidden: filter.hidden,
@@ -126,19 +139,117 @@ impl Config {
     }
 
     /// Load file configuration with proper error handling
+    ///
+    /// - `--no-config`: don't load anything.
+    /// - `--config FILE`: load exactly that file and propagate errors.
+    /// - No option: search current directory and parents; a malformed
+    ///   auto-discovered config warns and continues rather than failing.
     fn load_file_config(global: &GlobalArgs) -> Result<Option<file::FileConfig>, PctxError> {
-        match file::find_and_load() {
-            Ok(cfg) => Ok(Some(cfg)),
-            Err(PctxError::FileNotFound(_)) => Ok(None), // No config file is fine
-            Err(e) => {
-                // Config file exists but has errors
+        if global.no_config {
+            return Ok(None);
+        }
+
+        if let Some(path) = global.config.as_deref() {
+            return file::load_config(path).map(Some);
+        }
+
+        let Some(path) = file::find_config_file() else {
+            return Ok(None);
+        };
+
+        match file::load_config(&path) {
+            Ok(config) => Ok(Some(config)),
+            Err(error) => {
                 if !global.quiet {
-                    eprintln!("Warning: failed to load config file: {}", e);
+                    eprintln!(
+                        "Warning: failed to load config file {}: {}",
+                        path.display(),
+                        error
+                    );
                 }
-                // Continue without config file rather than failing
                 Ok(None)
             }
         }
+    }
+
+    /// Parse and validate `--path-alias ALIAS=PATH` values.
+    ///
+    /// Nested roots are sorted so the most specific root wins when
+    /// resolving a path against multiple aliases.
+    fn build_path_aliases(values: &[String]) -> Result<Vec<PathAlias>, PctxError> {
+        let mut aliases = Vec::new();
+        let mut seen_aliases = HashSet::new();
+        let mut seen_roots = HashSet::new();
+
+        for value in values {
+            let Some((alias, path)) = value.split_once('=') else {
+                return Err(PctxError::ConfigError(format!(
+                    "invalid path alias '{}'; expected ALIAS=PATH",
+                    value
+                )));
+            };
+
+            let alias = alias.trim();
+            let path = path.trim();
+
+            if alias.is_empty() || path.is_empty() {
+                return Err(PctxError::ConfigError(format!(
+                    "invalid path alias '{}'; alias and path must not be empty",
+                    value
+                )));
+            }
+
+            if alias == "."
+                || alias == ".."
+                || alias.contains('/')
+                || alias.contains('\\')
+                || !alias
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            {
+                return Err(PctxError::ConfigError(format!(
+                    "invalid alias '{}'; use letters, numbers, '.', '-' or '_'",
+                    alias
+                )));
+            }
+
+            if !seen_aliases.insert(alias.to_string()) {
+                return Err(PctxError::ConfigError(format!(
+                    "duplicate path alias '{}'",
+                    alias
+                )));
+            }
+
+            let input_root = PathBuf::from(path);
+            let root = dunce::canonicalize(&input_root)
+                .map_err(|_| PctxError::DirectoryNotFound(input_root.clone()))?;
+
+            if !root.is_dir() {
+                return Err(PctxError::DirectoryNotFound(root));
+            }
+
+            if !seen_roots.insert(root.clone()) {
+                return Err(PctxError::ConfigError(format!(
+                    "multiple aliases refer to the same root: {}",
+                    root.display()
+                )));
+            }
+
+            aliases.push(PathAlias {
+                alias: alias.to_string(),
+                root,
+            });
+        }
+
+        // Nested roots must win over their parents.
+        aliases.sort_by(|a, b| {
+            b.root
+                .components()
+                .count()
+                .cmp(&a.root.components().count())
+        });
+
+        Ok(aliases)
     }
 
     /// Build exclude and include patterns from filter args and file config
@@ -354,5 +465,76 @@ mod tests {
         assert!(d.max_line_length > 0);
         assert!(d.head_lines > 0);
         assert!(d.tail_lines > 0);
+    }
+
+    #[test]
+    fn build_path_aliases_unrelated_roots() {
+        let dir_a = tempfile::TempDir::new().unwrap();
+        let dir_b = tempfile::TempDir::new().unwrap();
+
+        let values = vec![
+            format!("api={}", dir_a.path().display()),
+            format!("shared={}", dir_b.path().display()),
+        ];
+
+        let aliases = Config::build_path_aliases(&values).unwrap();
+        assert_eq!(aliases.len(), 2);
+        assert!(aliases.iter().any(|a| a.alias == "api"));
+        assert!(aliases.iter().any(|a| a.alias == "shared"));
+    }
+
+    #[test]
+    fn build_path_aliases_nested_most_specific_first() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+
+        let values = vec![
+            format!("outer={}", dir.path().display()),
+            format!("inner={}", nested.display()),
+        ];
+
+        let aliases = Config::build_path_aliases(&values).unwrap();
+        assert_eq!(aliases[0].alias, "inner");
+        assert_eq!(aliases[1].alias, "outer");
+    }
+
+    #[test]
+    fn build_path_aliases_duplicate_alias_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let values = vec![
+            format!("dup={}", dir.path().display()),
+            format!("dup={}", dir.path().display()),
+        ];
+
+        assert!(Config::build_path_aliases(&values).is_err());
+    }
+
+    #[test]
+    fn build_path_aliases_duplicate_root_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let values = vec![
+            format!("a={}", dir.path().display()),
+            format!("b={}", dir.path().display()),
+        ];
+
+        assert!(Config::build_path_aliases(&values).is_err());
+    }
+
+    #[test]
+    fn build_path_aliases_invalid_format_fails() {
+        let values = vec!["not-a-valid-alias".to_string()];
+        assert!(Config::build_path_aliases(&values).is_err());
+    }
+
+    #[test]
+    fn build_path_aliases_nonexistent_root_fails() {
+        let values = vec!["x=/definitely/does/not/exist/anywhere".to_string()];
+        assert!(Config::build_path_aliases(&values).is_err());
+    }
+
+    #[test]
+    fn build_path_aliases_empty_is_ok() {
+        assert!(Config::build_path_aliases(&[]).unwrap().is_empty());
     }
 }

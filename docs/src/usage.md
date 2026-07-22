@@ -75,6 +75,9 @@ pctx src README.md Cargo.toml
 | `--json` | Emit structured JSON |
 | `--absolute-paths` | Display absolute paths instead of relative paths |
 | `--stdin` | Read file paths from stdin, one per line |
+| `--stdin0` | Read NUL-delimited file paths from stdin |
+| `--paths-file0 FILE` | Read NUL-delimited file paths from a file |
+| `--path-alias ALIAS=PATH` | Display files under `PATH` using `ALIAS` instead of a relative or absolute path; repeatable |
 
 Examples:
 
@@ -237,6 +240,67 @@ Behavior in stdin mode:
 - Directory paths are expanded recursively.
 - Positional paths are ignored when `--stdin` is used.
 - Non-existent paths are reported as file errors; if some files succeed, the command exits with partial success.
+
+## NUL-delimited path input
+
+`--stdin` splits on newlines, which breaks for paths that contain them. Use `--stdin0` or `--paths-file0` for NUL-delimited input instead:
+
+```bash
+# NUL-delimited stdin (pairs naturally with `find -print0`)
+find . -type f -print0 | pctx --stdin0
+
+# NUL-delimited path file — avoids command-line length limits and does not
+# require keeping an interactive stdin pipe open
+pctx --paths-file0 selected-paths.bin
+```
+
+`--stdin`, `--stdin0`, and `--paths-file0` are mutually exclusive. Positional paths are ignored whenever any of them is used, and an empty input is treated as no matching files (exit code `6`).
+
+## Path aliases
+
+`--path-alias ALIAS=PATH` maps files under an absolute directory to a short display name, which is useful for combining unrelated roots (e.g. multiple repositories) without leaking absolute paths into the generated output:
+
+```bash
+pctx \
+  /home/me/api/src/main.rs \
+  /home/me/shared/src/lib.rs \
+  --path-alias api=/home/me/api \
+  --path-alias shared=/home/me/shared
+```
+
+This renders paths as `api/src/main.rs` and `shared/src/lib.rs`. Notes:
+
+- `PATH` must exist and resolve to a directory.
+- Aliases must be unique, and each `PATH` may only be aliased once.
+- When aliased roots are nested, the most specific (deepest) root wins.
+- `--absolute-paths` overrides aliases and always shows the full path.
+
+## Configuration file selection
+
+By default, `pctx` searches the current directory and its parents for `.pctx.toml`. Override this with:
+
+| Flag | Description |
+|------|-------------|
+| `--config FILE` | Load exactly this config file; errors (missing or malformed) are fatal |
+| `--no-config` | Disable automatic and explicit `.pctx.toml` loading entirely |
+
+```bash
+# Explicit configuration
+pctx --config /workspace/.pctx.toml
+
+# Ignore all config files
+pctx --no-config
+```
+
+`--config` and `--no-config` are mutually exclusive. Only an *automatically discovered* malformed config warns and falls back to defaults; an explicitly supplied `--config` file that is missing or malformed is a hard error.
+
+## Capabilities
+
+`pctx capabilities` reports which machine-readable features this build supports, which is useful for integrations that need to detect support before using a flag:
+
+```bash
+pctx --json capabilities
+```
 
 ## Listing files
 

@@ -8,7 +8,19 @@ Create one with:
 pctx config init
 ```
 
-By default, pctx searches for `.pctx.toml` in the current directory and then in parent directories.
+By default, pctx searches for `.pctx.toml` in the current directory and then in parent directories. This can be overridden:
+
+| Flag | Description |
+|------|-------------|
+| `--config FILE` | Load exactly this config file instead of searching. A missing or malformed file is a fatal error |
+| `--no-config` | Disable automatic and explicit `.pctx.toml` loading; only built-in defaults and CLI arguments apply |
+
+```bash
+pctx --config /workspace/.pctx.toml
+pctx --no-config
+```
+
+`--config` and `--no-config` are mutually exclusive.
 
 ## Supported keys
 
@@ -106,9 +118,9 @@ pctx config defaults --json
 
 ## Syntax errors
 
-During normal context generation, if a discovered `.pctx.toml` exists but cannot be parsed, pctx prints a warning and continues without that config file.
+If a config file is *automatically discovered* (no `--config` given) but cannot be parsed, pctx prints a warning and continues without that config file.
 
-`pctx config show` is stricter: parse errors are reported as command errors.
+If a config file is loaded via an explicit `--config FILE`, a missing file or parse error is a fatal error instead — the same is true for `--config` with `pctx config show`.
 
 ## Default exclusions
 

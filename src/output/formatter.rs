@@ -299,6 +299,7 @@ mod tests {
     fn config_with(format: ContentFormat, tree: bool) -> Config {
         Config {
             paths: vec![std::path::PathBuf::from(".")],
+            path_aliases: Vec::new(),
             exclude_patterns: Vec::new(),
             include_patterns: Vec::new(),
             include_hidden: false,

@@ -12,6 +12,31 @@ In JSON mode:
 - Progress and diagnostic messages are written to stderr.
 - Errors are also written to stdout as JSON.
 - The process exit code still indicates success or failure.
+- Requested side effects (`--output FILE`, `--clipboard`) are completed before the JSON response is printed, so a side-effect failure produces a single JSON error response rather than a success response followed by an error.
+
+## Capabilities
+
+Integrations that need to detect which features a given `pctx` build supports can query them in a stable, machine-readable form:
+
+```bash
+pctx --json capabilities
+```
+
+```json
+{
+  "schema_version": 1,
+  "name": "pctx",
+  "version": "1.1.0",
+  "clipboard": true,
+  "tokens": true,
+  "json_output": true,
+  "stdin": true,
+  "stdin0": true,
+  "paths_file0": true,
+  "path_aliases": true,
+  "formats": ["markdown", "xml", "plain"]
+}
+```
 
 ## Response statuses
 
